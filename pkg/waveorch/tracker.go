@@ -13,8 +13,9 @@ import (
 
 // ProjectTracker 项目追踪器
 type ProjectTracker struct {
-	mu       sync.RWMutex
-	projects map[string]*ProjectState
+	mu         sync.RWMutex
+	projects   map[string]*ProjectState
+	maxReports int // 每个项目最多保留的 Reports 数量
 }
 
 // ProjectState 项目状态
@@ -33,7 +34,8 @@ type ProjectState struct {
 // NewProjectTracker 创建项目追踪器
 func NewProjectTracker() *ProjectTracker {
 	return &ProjectTracker{
-		projects: make(map[string]*ProjectState),
+		projects:   make(map[string]*ProjectState),
+		maxReports: 50, // 默认每个项目最多保留50个 Reports
 	}
 }
 
@@ -78,6 +80,10 @@ func (pt *ProjectTracker) UpdateRound(projectPath string, round int, report *Rep
 	state.UpdatedAt = time.Now()
 	if report != nil {
 		state.Reports = append(state.Reports, *report)
+		// 保留上限检查
+		if pt.maxReports > 0 && len(state.Reports) > pt.maxReports {
+			state.Reports = state.Reports[len(state.Reports)-pt.maxReports:]
+		}
 	}
 }
 
@@ -102,7 +108,7 @@ func (pt *ProjectTracker) ListProjects() []*ProjectState {
 	return result
 }
 
-// SaveToFile 保存项目状态到文件
+// SaveToFile 保存项目状态到文件（脱敏后）
 func (pt *ProjectTracker) SaveToFile(projectPath string) error {
 	pt.mu.RLock()
 	state, ok := pt.projects[projectPath]
@@ -116,11 +122,37 @@ func (pt *ProjectTracker) SaveToFile(projectPath string) error {
 		return err
 	}
 
-	data, err := json.MarshalIndent(state, "", "  ")
+	// 创建脱敏副本
+	stateCopy := *state
+	stateCopy.Reports = make([]Report, len(state.Reports))
+	for i, r := range state.Reports {
+		stateCopy.Reports[i] = redactReport(r)
+	}
+
+	data, err := json.MarshalIndent(stateCopy, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(filepath.Join(orchDir, "state.json"), data, 0600)
+}
+
+// redactReport 对 Report 进行脱敏
+func redactReport(r Report) Report {
+	r.Summary = Redact(r.Summary)
+	for i := range r.Actions {
+		r.Actions[i] = Redact(r.Actions[i])
+	}
+	for i := range r.CommandsRun {
+		r.CommandsRun[i] = Redact(r.CommandsRun[i])
+	}
+	for i := range r.Risks {
+		r.Risks[i] = Redact(r.Risks[i])
+	}
+	for i := range r.NextActions {
+		r.NextActions[i] = Redact(r.NextActions[i])
+	}
+	r.NeedsReason = Redact(r.NeedsReason)
+	return r
 }
 
 // SetBranch 设置项目分支
