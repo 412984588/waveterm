@@ -33,6 +33,8 @@ type Engine struct {
 	taskQueue    chan *Task
 	maxParallel  int
 	paused       bool
+	maxTasks     int           // 最大任务数（0=无限制）
+	taskTTL      time.Duration // 已完成任务保留时间（0=永久）
 }
 
 // NewEngine 创建编排引擎
@@ -47,6 +49,8 @@ func NewEngine(registry *AgentRegistry, maxParallel int) *Engine {
 		taskQueue:    make(chan *Task, 100),
 		maxParallel:  maxParallel,
 		paused:       false,
+		maxTasks:     500,              // 默认最多500个任务
+		taskTTL:      24 * time.Hour,   // 默认保留24小时
 	}
 }
 
@@ -140,4 +144,67 @@ func (e *Engine) UpdateTaskStatus(taskID, status string, report *Report) {
 			task.CompletedAt = time.Now()
 		}
 	}
+}
+
+// CleanupTasks 清理过期和超量任务
+func (e *Engine) CleanupTasks() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	now := time.Now()
+	var toDelete []string
+
+	// 1. TTL 清理：删除已完成且超过 TTL 的任务
+	if e.taskTTL > 0 {
+		for id, task := range e.tasks {
+			if (task.Status == "completed" || task.Status == "failed") &&
+				!task.CompletedAt.IsZero() &&
+				now.Sub(task.CompletedAt) > e.taskTTL {
+				toDelete = append(toDelete, id)
+			}
+		}
+	}
+
+	// 2. 数量清理：如果超过 maxTasks，删除最老的已完成任务
+	if e.maxTasks > 0 && len(e.tasks)-len(toDelete) > e.maxTasks {
+		// 收集已完成任务按时间排序
+		type taskAge struct {
+			id   string
+			time time.Time
+		}
+		var completed []taskAge
+		for id, task := range e.tasks {
+			if task.Status == "completed" || task.Status == "failed" {
+				completed = append(completed, taskAge{id, task.CompletedAt})
+			}
+		}
+		// 按完成时间排序（最老的在前）
+		for i := 0; i < len(completed)-1; i++ {
+			for j := i + 1; j < len(completed); j++ {
+				if completed[j].time.Before(completed[i].time) {
+					completed[i], completed[j] = completed[j], completed[i]
+				}
+			}
+		}
+		// 删除超出部分
+		excess := len(e.tasks) - len(toDelete) - e.maxTasks
+		for i := 0; i < excess && i < len(completed); i++ {
+			toDelete = append(toDelete, completed[i].id)
+		}
+	}
+
+	// 执行删除
+	for _, id := range toDelete {
+		delete(e.tasks, id)
+	}
+
+	return len(toDelete)
+}
+
+// SetCleanupPolicy 设置清理策略
+func (e *Engine) SetCleanupPolicy(maxTasks int, ttl time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.maxTasks = maxTasks
+	e.taskTTL = ttl
 }
