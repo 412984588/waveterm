@@ -1,8 +1,18 @@
 # Wave-Orch 状态追踪
 
-> 最后更新: 2026-01-30 00:45
+> 最后更新: 2026-01-30 05:45
 
 ## 当前里程碑
+
+### ✅ P0-P2 Bug 修复 (2026-01-30 05:45)
+
+- [x] A. Kill switch fail-closed (isPaused 任何错误返回 true)
+- [x] B. Log cleanup days>=1 验证 + YYYY-MM-DD 目录名解析
+- [x] C. REPORT 严格验证 (project_id, round>0, summary, files_changed, commands_run)
+- [x] D. 增强脱敏 (JWT, Bearer, GitLab, Slack, AWS secret, 国际电话)
+- [x] E. wsh output 真实实现 (TermGetScrollbackLinesCommand)
+- [x] F. wsh inject --wait 标志 (shell 就绪重试)
+- [x] G. Engine 任务清理策略 (maxTasks=500, TTL=24h)
 
 ### ✅ 安全/稳定性维护 (2026-01-30)
 
