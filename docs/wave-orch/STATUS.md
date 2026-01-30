@@ -1,8 +1,34 @@
 # Wave-Orch 状态追踪
 
-> 最后更新: 2026-01-30 05:45
+> 最后更新: 2026-01-30 07:30
 
 ## 当前里程碑
+
+### ✅ M11: Shell Block 修复 (2026-01-30 07:30)
+
+**问题**: demo 脚本使用 `wsh run` 创建的是 `controller="cmd"` 块，不支持 inject。
+
+**解决**: 改用 `wsh launch` + widgets.json 创建 `controller="shell"` 块。
+
+**关键概念**:
+- `controller="shell"`: 持久 shell 会话，支持 inject/output
+- `controller="cmd"`: 一次性命令块，不支持 inject
+- `wsh launch <widget-id>`: 从 widgets.json 创建 block
+- `wsh` 需要 Wave 运行提供 access token
+
+**修复内容**:
+- [x] 新增 scripts/wave_orch_lib.sh (ensure_shell_widget, launch_shell_block)
+- [x] 重写 wave_orch_demo_3_agents.sh 使用 shell block
+- [x] 重写 wave_orch_demo_multi_project.sh 使用 shell block
+- [x] 修复 JSON 提取（终端换行导致跨行）
+
+**验证结果**:
+```
+go test ./pkg/waveorch/... -v  # ✅ 21/21 PASS
+./scripts/wave_orch_e2e_smoke.sh  # ✅ PASS
+./scripts/wave_orch_demo_3_agents.sh  # ✅ 3/3 PASS
+./scripts/wave_orch_demo_multi_project.sh  # ✅ 2/2 PASS
+```
 
 ### ✅ P0-P2 Bug 修复 (2026-01-30 05:45)
 
@@ -94,7 +120,7 @@
 - [x] wsh run: 成功创建 block
 - [x] wsh wave-orch demo: 检测到 3 个 Agent (gemini, claude-code, codex)
 - [x] wsh wave-orch status: 正常 (paused: false)
-- [ ] wsh output: 需要重启 Wave Terminal 使用新版本
+- [x] wsh output: 成功读取 scrollback
 
 ---
 

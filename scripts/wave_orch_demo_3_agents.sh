@@ -79,11 +79,20 @@ for i in "${!AGENTS[@]}"; do
         continue
     }
 
-    sleep 1
-    OUTPUT=$($WSH output "$block" --lines=20 2>/dev/null || echo "")
+    # Wait for REPORT to appear (with timeout)
+    $WSH wait --timeout=5s "$block" "<<<END_REPORT>>>" &>/dev/null || true
+    sleep 2
+    OUTPUT=$($WSH output "$block" --lines=50 2>/dev/null || echo "")
 
-    if echo "$OUTPUT" | grep -q "<<<REPORT>>>"; then
-        JSON=$(echo "$OUTPUT" | grep -o '<<<REPORT>>>.*<<<END_REPORT>>>' | sed 's/<<<REPORT>>>//;s/<<<END_REPORT>>>//')
+    # Merge lines and extract JSON (terminal wraps long lines)
+    MERGED=$(echo "$OUTPUT" | tr -d '\n' | tr -s ' ')
+    if echo "$MERGED" | grep -q "<<<REPORT>>>"; then
+        # Extract first complete REPORT only (avoid echo command duplication)
+        JSON=$(echo "$MERGED" | sed -n 's/.*<<<REPORT>>>\({[^}]*}\)<<<END_REPORT>>>.*/\1/p' | head -1)
+        if [[ -z "$JSON" ]]; then
+            # Fallback: try simpler extraction
+            JSON=$(echo "$MERGED" | grep -o '<<<REPORT>>>[^<]*<<<END_REPORT>>>' | head -1 | sed 's/<<<REPORT>>>//;s/<<<END_REPORT>>>//')
+        fi
         if echo "$JSON" | jq -e '.agent and .status' &>/dev/null; then
             STATUS=$(echo "$JSON" | jq -r '.status')
             echo "✅ $agent: $STATUS"

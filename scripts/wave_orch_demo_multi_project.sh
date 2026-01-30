@@ -40,6 +40,7 @@ PROJECT_B="$DEMO_BASE/project-beta"
 setup_demo_project() {
     local path=$1
     local name=$2
+    local ORIG_DIR=$(pwd)
 
     if [[ -d "$path" ]]; then
         echo "✅ $name exists"
@@ -52,10 +53,11 @@ setup_demo_project() {
     echo "# $name" > README.md
     echo "console.log('Hello from $name');" > index.js
     git add .
-    git commit -q -m "Initial commit"
+    git commit -q -m "Initial commit" --no-verify
     mkdir -p .wave-orch
     echo "{\"project\": \"$name\"}" > .wave-orch/config.json
     echo "✅ Created $name"
+    cd "$ORIG_DIR"
 }
 
 setup_demo_project "$PROJECT_A" "project-alpha"
@@ -107,11 +109,19 @@ for i in "${!PROJECT_BLOCKS[@]}"; do
         continue
     }
 
-    sleep 1
-    OUTPUT=$($WSH output "$block_id" --lines=20 2>/dev/null || echo "")
+    # Wait for REPORT to appear
+    $WSH wait --timeout=5s "$block_id" "<<<END_REPORT>>>" &>/dev/null || true
+    sleep 2
+    OUTPUT=$($WSH output "$block_id" --lines=50 2>/dev/null || echo "")
 
-    if echo "$OUTPUT" | grep -q "<<<REPORT>>>"; then
-        JSON=$(echo "$OUTPUT" | grep -o '<<<REPORT>>>.*<<<END_REPORT>>>' | sed 's/<<<REPORT>>>//;s/<<<END_REPORT>>>//')
+    # Merge lines and extract JSON (terminal wraps long lines)
+    MERGED=$(echo "$OUTPUT" | tr -d '\n' | tr -s ' ')
+    if echo "$MERGED" | grep -q "<<<REPORT>>>"; then
+        # Extract first complete REPORT only
+        JSON=$(echo "$MERGED" | sed -n 's/.*<<<REPORT>>>\({[^}]*}\)<<<END_REPORT>>>.*/\1/p' | head -1)
+        if [[ -z "$JSON" ]]; then
+            JSON=$(echo "$MERGED" | grep -o '<<<REPORT>>>[^<]*<<<END_REPORT>>>' | head -1 | sed 's/<<<REPORT>>>//;s/<<<END_REPORT>>>//')
+        fi
         if echo "$JSON" | jq -e '.project and .status' &>/dev/null; then
             STATUS=$(echo "$JSON" | jq -r '.status')
             echo "✅ $name: $STATUS"
