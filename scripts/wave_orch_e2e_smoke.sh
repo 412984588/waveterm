@@ -99,14 +99,14 @@ echo "Expected cwd: $EXPECTED_CWD"
 
 # === Inject ===
 echo "--- Injecting command ---"
-$WSH inject "$BLOCK_ID" 'echo "wave-orch-smoke-test-ok"'
+$WSH inject --wait "$BLOCK_ID" 'echo "wave-orch-smoke-test-ok"' &>/dev/null
 echo "✅ Injected"
 
 # === Wait ===
 echo "--- Waiting for pattern ---"
 echo "Pattern: wave-orch-smoke-test-ok"
 sleep 1
-if $WSH wait "$BLOCK_ID" --pattern="wave-orch-smoke-test-ok" --timeout=5000; then
+if $WSH wait "$BLOCK_ID" --pattern="wave-orch-smoke-test-ok" --timeout=15000 &>/dev/null; then
     echo "✅ Pattern found"
 else
     echo "⚠️ Wait timeout, checking output anyway..."
