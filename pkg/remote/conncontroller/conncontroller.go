@@ -319,11 +319,11 @@ func (conn *SSHConn) GetEnvironmentMaps(ctx context.Context) (map[string]string,
 
 func runSessionWithContext(ctx context.Context, session *ssh.Session, cmd string) error {
 	errCh := make(chan error, 1)
-	
+
 	go func() {
 		errCh <- session.Run(cmd)
 	}()
-	
+
 	select {
 	case <-ctx.Done():
 		session.Close()
@@ -619,7 +619,7 @@ func (conn *SSHConn) getPermissionToInstallWsh(ctx context.Context, clientDispla
 		setConfigErr := wconfig.SetBaseConfigValue(meta)
 		if setConfigErr != nil {
 			// this is not a critical error, just log and continue
-			log.Printf("warning: error writing to base config file: %v", err)
+			log.Printf("warning: error writing to base config file: %v", setConfigErr)
 		}
 	}
 	return true, nil
