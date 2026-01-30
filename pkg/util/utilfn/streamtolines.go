@@ -70,8 +70,9 @@ func StreamToLines(input io.Reader, lineFn func([]byte)) error {
 
 // starts a goroutine to drive the channel
 // line output does not include the trailing newline
+// Deprecated: Use StreamToLinesChanWithContext for proper cancellation
 func StreamToLinesChan(input io.Reader) chan LineOutput {
-	ch := make(chan LineOutput)
+	ch := make(chan LineOutput, 16) // buffered to prevent goroutine leak
 	go func() {
 		defer close(ch)
 		err := StreamToLines(input, func(line []byte) {
@@ -82,6 +83,56 @@ func StreamToLinesChan(input io.Reader) chan LineOutput {
 		}
 	}()
 	return ch
+}
+
+// StreamToLinesChanWithContext starts a goroutine to drive the channel with context cancellation support.
+// When context is cancelled, the goroutine will exit after the next read completes.
+// The caller should close the input reader to unblock the read when cancelling.
+// Returns a buffered channel to prevent goroutine leaks on slow consumers.
+func StreamToLinesChanWithContext(ctx context.Context, input io.Reader) chan LineOutput {
+	ch := make(chan LineOutput, 16)
+	go func() {
+		defer close(ch)
+		var lineBuf lineBuf
+		readBuf := make([]byte, 64*1024)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			n, err := input.Read(readBuf)
+			if n > 0 {
+				streamToLines_processBuf(&lineBuf, readBuf[:n], func(line []byte) {
+					select {
+					case ch <- LineOutput{Line: string(line)}:
+					case <-ctx.Done():
+						return
+					}
+				})
+			}
+			if err != nil {
+				if err != io.EOF && ctx.Err() == nil {
+					select {
+					case ch <- LineOutput{Error: err}:
+					case <-ctx.Done():
+					}
+				}
+				return
+			}
+		}
+	}()
+	return ch
+}
+
+// DrainLinesChan drains remaining items from a lines channel to prevent goroutine leaks.
+// Should be called when abandoning a channel before it's fully consumed.
+func DrainLinesChan(ch chan LineOutput) {
+	go func() {
+		for range ch {
+			// discard
+		}
+	}()
 }
 
 // LineWriter is an io.Writer that processes data line-by-line via a callback.

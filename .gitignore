@@ -36,3 +36,7 @@ storybook-static/
 test-results.xml
 
 docsite/
+.wave-orch/
+
+# OMC local state
+.omc/

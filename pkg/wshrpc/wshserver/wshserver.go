@@ -1499,3 +1499,46 @@ func (ws *WshServer) JobControllerAttachJobCommand(ctx context.Context, data wsh
 func (ws *WshServer) JobControllerDetachJobCommand(ctx context.Context, jobId string) error {
 	return jobcontroller.DetachJobFromBlock(ctx, jobId, true)
 }
+
+// TermGetScrollbackLinesCommand reads terminal output from blockfile
+func (ws *WshServer) TermGetScrollbackLinesCommand(ctx context.Context, data wshrpc.CommandTermGetScrollbackLinesData) (*wshrpc.CommandTermGetScrollbackLinesRtnData, error) {
+	rpcSource := wshutil.GetRpcSourceFromContext(ctx)
+	if rpcSource == "" {
+		return nil, fmt.Errorf("no rpc source context for TermGetScrollbackLines")
+	}
+	// Extract blockId from route (format: "block:BLOCKID")
+	blockId := strings.TrimPrefix(rpcSource, "block:")
+	if blockId == "" || blockId == rpcSource {
+		return nil, fmt.Errorf("invalid block route: %s", rpcSource)
+	}
+	_, fileData, err := filestore.WFS.ReadFile(ctx, blockId, wavebase.BlockFile_Term)
+	if err != nil {
+		return nil, fmt.Errorf("error reading term file: %w", err)
+	}
+	content := string(fileData)
+	allLines := strings.Split(content, "\n")
+
+	// Handle negative indices (from end)
+	start := data.LineStart
+	end := data.LineEnd
+	totalLines := len(allLines)
+
+	if start < 0 {
+		start = totalLines + start
+	}
+	if end <= 0 {
+		end = totalLines + end
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end > totalLines {
+		end = totalLines
+	}
+	if start >= end {
+		return &wshrpc.CommandTermGetScrollbackLinesRtnData{Lines: []string{}}, nil
+	}
+
+	lines := allLines[start:end]
+	return &wshrpc.CommandTermGetScrollbackLinesRtnData{Lines: lines}, nil
+}

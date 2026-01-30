@@ -1,0 +1,248 @@
+// Copyright 2025, Command Line Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+package cmd
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/spf13/cobra"
+	"github.com/wavetermdev/waveterm/pkg/waveorch"
+)
+
+var waveOrchCmd = &cobra.Command{
+	Use:   "wave-orch",
+	Short: "Wave-Orch orchestration control",
+	Long:  `Control the Wave-Orch multi-agent orchestration system.`,
+}
+
+var waveOrchStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "show orchestration status",
+	RunE:  waveOrchStatusRun,
+}
+
+var waveOrchPauseCmd = &cobra.Command{
+	Use:   "pause",
+	Short: "pause all automatic injection",
+	RunE:  waveOrchPauseRun,
+}
+
+var waveOrchResumeCmd = &cobra.Command{
+	Use:   "resume",
+	Short: "resume automatic injection",
+	RunE:  waveOrchResumeRun,
+}
+
+var waveOrchCleanupCmd = &cobra.Command{
+	Use:   "cleanup",
+	Short: "cleanup old logs",
+	RunE:  waveOrchCleanupRun,
+}
+
+var waveOrchDiagnosticCmd = &cobra.Command{
+	Use:   "diagnostic",
+	Short: "generate environment diagnostic snapshot",
+	RunE:  waveOrchDiagnosticRun,
+}
+
+var waveOrchDemoCmd = &cobra.Command{
+	Use:   "demo",
+	Short: "run 3-agent parallel demo",
+	RunE:  waveOrchDemoRun,
+}
+
+var cleanupDays int
+var diagnosticProject string
+
+func init() {
+	waveOrchCmd.AddCommand(waveOrchStatusCmd)
+	waveOrchCmd.AddCommand(waveOrchPauseCmd)
+	waveOrchCmd.AddCommand(waveOrchResumeCmd)
+	waveOrchCleanupCmd.Flags().IntVar(&cleanupDays, "days", 7, "retention days")
+	waveOrchCmd.AddCommand(waveOrchCleanupCmd)
+	waveOrchDiagnosticCmd.Flags().StringVar(&diagnosticProject, "project", "", "project path to diagnose")
+	waveOrchCmd.AddCommand(waveOrchDiagnosticCmd)
+	waveOrchCmd.AddCommand(waveOrchDemoCmd)
+	rootCmd.AddCommand(waveOrchCmd)
+}
+
+func getWaveOrchStateDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".wave-orch", "state")
+}
+
+func getPausedFilePath() string {
+	return filepath.Join(getWaveOrchStateDir(), "paused")
+}
+
+// isPaused checks if Wave-Orch is paused. Fail-closed: any error except
+// "file not found" is treated as paused for safety.
+func isPaused() bool {
+	_, err := os.Stat(getPausedFilePath())
+	if err == nil {
+		return true // pause file exists
+	}
+	if os.IsNotExist(err) {
+		return false // pause file doesn't exist, not paused
+	}
+	// Any other error (permission denied, etc.) -> fail-closed
+	fmt.Fprintf(os.Stderr, "WARN: kill switch check failed (fail-closed): %v\n", err)
+	return true
+}
+
+func waveOrchStatusRun(cmd *cobra.Command, args []string) error {
+	status := map[string]any{
+		"paused": isPaused(),
+	}
+	data, _ := json.MarshalIndent(status, "", "  ")
+	WriteStdout("%s\n", string(data))
+	return nil
+}
+
+func waveOrchPauseRun(cmd *cobra.Command, args []string) error {
+	stateDir := getWaveOrchStateDir()
+	if err := os.MkdirAll(stateDir, 0700); err != nil {
+		return fmt.Errorf("create state dir: %w", err)
+	}
+	f, err := os.OpenFile(getPausedFilePath(), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("create pause file: %w", err)
+	}
+	f.Close()
+	WriteStdout("Wave-Orch paused\n")
+	return nil
+}
+
+func waveOrchResumeRun(cmd *cobra.Command, args []string) error {
+	err := os.Remove(getPausedFilePath())
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove pause file: %w", err)
+	}
+	WriteStdout("Wave-Orch resumed\n")
+	return nil
+}
+
+func waveOrchCleanupRun(cmd *cobra.Command, args []string) error {
+	// Validate days >= 1
+	if cleanupDays < 1 {
+		return fmt.Errorf("days must be >= 1, got %d", cleanupDays)
+	}
+
+	home, _ := os.UserHomeDir()
+	logsDir := filepath.Join(home, ".wave-orch", "logs")
+
+	entries, err := os.ReadDir(logsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			WriteStdout("No logs to clean\n")
+			return nil
+		}
+		return err
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -cleanupDays)
+	cleaned := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		// Parse directory name as date (YYYY-MM-DD format)
+		dirDate, err := time.Parse("2006-01-02", entry.Name())
+		if err != nil {
+			// Skip directories that don't match date format
+			continue
+		}
+		if dirDate.Before(cutoff) {
+			os.RemoveAll(filepath.Join(logsDir, entry.Name()))
+			cleaned++
+		}
+	}
+	WriteStdout("Cleaned %d old log directories\n", cleaned)
+	return nil
+}
+
+func cutoffTime(days int) time.Time {
+	return time.Now().AddDate(0, 0, -days)
+}
+
+func waveOrchDiagnosticRun(cmd *cobra.Command, args []string) error {
+	// 检查 kill switch
+	if isPaused() {
+		WriteStdout("Wave-Orch paused - diagnostic skipped\n")
+		return nil
+	}
+
+	// 初始化 Agent 注册表
+	registry := waveorch.NewAgentRegistry()
+	registry.InitDefaultAgents()
+	registry.DetectAvailableAgents()
+
+	// 创建配置检查器
+	inspector := waveorch.NewConfigInspector(registry)
+
+	// 生成诊断快照
+	snapshot := inspector.GenerateDiagnostic(diagnosticProject)
+
+	// 保存到全局日志目录
+	globalDir := waveorch.GetGlobalLogDir()
+	timestamp := time.Now().Format("20060102-150405")
+	globalPath := filepath.Join(globalDir, fmt.Sprintf("diagnostic-%s.json", timestamp))
+	if err := inspector.SaveDiagnostic(snapshot, globalPath); err != nil {
+		return fmt.Errorf("save global diagnostic: %w", err)
+	}
+	WriteStdout("Global diagnostic: %s\n", globalPath)
+
+	// 如果指定了项目，也保存到项目目录
+	if diagnosticProject != "" {
+		projectDir := waveorch.GetProjectOrchDir(diagnosticProject)
+		projectPath := filepath.Join(projectDir, "diagnostic.json")
+		if err := inspector.SaveDiagnostic(snapshot, projectPath); err != nil {
+			return fmt.Errorf("save project diagnostic: %w", err)
+		}
+		WriteStdout("Project diagnostic: %s\n", projectPath)
+	}
+
+	// 清理旧日志
+	logger := waveorch.NewLogger(7)
+	logger.CleanOldLogs()
+
+	return nil
+}
+
+func waveOrchDemoRun(cmd *cobra.Command, args []string) error {
+	// 检查 kill switch
+	if isPaused() {
+		WriteStdout("Wave-Orch paused - demo skipped\n")
+		return nil
+	}
+
+	WriteStdout("=== Wave-Orch 3-Agent Demo ===\n\n")
+
+	// 初始化 Agent 注册表
+	registry := waveorch.NewAgentRegistry()
+	registry.InitDefaultAgents()
+	registry.DetectAvailableAgents()
+
+	// 显示可用 Agent
+	available := registry.GetAvailableAgents()
+	WriteStdout("Available agents: %d\n", len(available))
+	for _, agent := range available {
+		WriteStdout("  - %s: %s\n", agent.Name, agent.ExecCmd)
+	}
+
+	if len(available) == 0 {
+		WriteStdout("\n❌ No agent CLI found\n")
+		WriteStdout("Install at least one of: claude, codex, gemini\n")
+		return nil
+	}
+
+	WriteStdout("\n✅ Demo ready. Run scripts/wave_orch_demo_3_agents.sh for full demo.\n")
+	WriteStdout("   (Requires Wave Terminal running)\n")
+
+	return nil
+}

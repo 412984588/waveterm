@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -319,11 +320,11 @@ func (conn *SSHConn) GetEnvironmentMaps(ctx context.Context) (map[string]string,
 
 func runSessionWithContext(ctx context.Context, session *ssh.Session, cmd string) error {
 	errCh := make(chan error, 1)
-	
+
 	go func() {
 		errCh <- session.Run(cmd)
 	}()
-	
+
 	select {
 	case <-ctx.Done():
 		session.Close()
@@ -454,17 +455,28 @@ func (conn *SSHConn) StartConnServer(ctx context.Context, afterUpdate bool, useR
 	if err != nil {
 		return false, "", "", fmt.Errorf("unable to start conn controller command: %w", err)
 	}
-	linesChan := utilfn.StreamToLinesChan(pipeRead)
+	// Create cancellable context for line reading
+	lineCtx, lineCancel := context.WithCancel(ctx)
+	linesChan := utilfn.StreamToLinesChanWithContext(lineCtx, pipeRead)
+
+	// Helper to cleanup on error: cancel context, close pipe to unblock reader, drain channel
+	cleanupOnError := func() {
+		lineCancel()
+		pipeWrite.Close()
+		utilfn.DrainLinesChan(linesChan)
+		sshSession.Close()
+	}
+
 	versionLine, err := utilfn.ReadLineWithTimeout(linesChan, utilfn.TimeoutFromContext(ctx, 30*time.Second))
 	if err != nil {
-		sshSession.Close()
+		cleanupOnError()
 		return false, "", "", fmt.Errorf("error reading wsh version: %w", err)
 	}
 	conn.Infof(ctx, "actual connnserverversion: %q\n", versionLine)
 	conn.Infof(ctx, "got connserver version: %s\n", strings.TrimSpace(versionLine))
 	isUpToDate, clientVersion, osArchStr, err := IsWshVersionUpToDate(ctx, versionLine)
 	if err != nil {
-		sshSession.Close()
+		cleanupOnError()
 		return false, "", "", fmt.Errorf("error checking wsh version: %w", err)
 	}
 	if isUpToDate && !afterUpdate && os.Getenv(wavebase.WaveWshForceUpdateVarName) != "" {
@@ -473,12 +485,12 @@ func (conn *SSHConn) StartConnServer(ctx context.Context, afterUpdate bool, useR
 	}
 	conn.Infof(ctx, "connserver up-to-date: %v\n", isUpToDate)
 	if !isUpToDate {
-		sshSession.Close()
+		cleanupOnError()
 		return true, clientVersion, osArchStr, nil
 	}
 	jwtLine, err := utilfn.ReadLineWithTimeout(linesChan, 3*time.Second)
 	if err != nil {
-		sshSession.Close()
+		cleanupOnError()
 		return false, clientVersion, "", fmt.Errorf("error reading jwt status line: %w", err)
 	}
 	conn.Infof(ctx, "got jwt status line: %s\n", jwtLine)
@@ -487,7 +499,7 @@ func (conn *SSHConn) StartConnServer(ctx context.Context, afterUpdate bool, useR
 		conn.Infof(ctx, "writing jwt token to connserver\n")
 		_, err = fmt.Fprintf(stdinPipe, "%s\n", jwtToken)
 		if err != nil {
-			sshSession.Close()
+			cleanupOnError()
 			return false, clientVersion, "", fmt.Errorf("failed to write JWT token: %w", err)
 		}
 	}
@@ -518,15 +530,24 @@ func (conn *SSHConn) StartConnServer(ctx context.Context, afterUpdate bool, useR
 		defer func() {
 			panichandler.PanicHandler("conncontroller:sshSession-output", recover())
 		}()
+		// Only log stdout if explicitly enabled via env var (security: may contain tokens)
+		logStdout := os.Getenv("WAVE_LOG_CONNSERVER_OUTPUT") == "1"
 		for output := range linesChan {
 			if output.Error != nil {
-				log.Printf("[conncontroller:%s:output] error: %v\n", conn.GetName(), output.Error)
+				if logStdout {
+					log.Printf("[conncontroller:%s:output] error: %v\n", conn.GetName(), output.Error)
+				}
+				continue
+			}
+			if !logStdout {
 				continue
 			}
 			line := output.Line
 			if !strings.HasSuffix(line, "\n") {
 				line += "\n"
 			}
+			// Redact sensitive content before logging
+			line = redactConnserverOutput(line)
 			log.Printf("[conncontroller:%s:output] %s", conn.GetName(), line)
 		}
 	}()
@@ -619,7 +640,7 @@ func (conn *SSHConn) getPermissionToInstallWsh(ctx context.Context, clientDispla
 		setConfigErr := wconfig.SetBaseConfigValue(meta)
 		if setConfigErr != nil {
 			// this is not a critical error, just log and continue
-			log.Printf("warning: error writing to base config file: %v", err)
+			log.Printf("warning: error writing to base config file: %v", setConfigErr)
 		}
 	}
 	return true, nil
@@ -1169,4 +1190,22 @@ func GetConnectionsFromConfig() ([]string, error) {
 	remote.WaveSshConfigUserSettings().ReloadConfigs()
 
 	return resolveSshConfigPatterns(sshConfigFiles)
+}
+
+// redactConnserverOutput masks sensitive content in connserver output before logging.
+// Redacts: JWT tokens, Bearer tokens, API keys, and REPORT JSON content.
+var (
+	jwtPatternConn    = regexp.MustCompile(`eyJ[A-Za-z0-9\-_]+\.eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+`)
+	bearerPatternConn = regexp.MustCompile(`(?i)(Bearer|Authorization)["\s:=]+["']?([A-Za-z0-9\-_\.]+)["']?`)
+	apiKeyPatternConn = regexp.MustCompile(`(?i)(api[_-]?key|token|secret)["\s:=]+["']?([a-zA-Z0-9_\-]{16,})["']?`)
+	reportPatternConn = regexp.MustCompile(`<<<REPORT>>>[\s\S]*?<<<END_REPORT>>>`)
+)
+
+func redactConnserverOutput(line string) string {
+	result := line
+	result = jwtPatternConn.ReplaceAllString(result, "eyJ***REDACTED_JWT***")
+	result = bearerPatternConn.ReplaceAllString(result, "${1}=***REDACTED***")
+	result = apiKeyPatternConn.ReplaceAllString(result, "${1}=***REDACTED***")
+	result = reportPatternConn.ReplaceAllString(result, "<<<REPORT>>>***REDACTED***<<<END_REPORT>>>")
+	return result
 }
