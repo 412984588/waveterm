@@ -4,16 +4,18 @@
 package cmd
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/wavetermdev/waveterm/pkg/wshrpc"
+	"github.com/wavetermdev/waveterm/pkg/wshrpc/wshclient"
+	"github.com/wavetermdev/waveterm/pkg/wshutil"
 )
 
 var outputCmd = &cobra.Command{
 	Use:     "output <blockid>",
-	Short:   "get output from a terminal block (placeholder)",
-	Long:    `Get the scrollback output from a terminal block. Currently returns placeholder.`,
+	Short:   "get output from a terminal block",
+	Long:    `Get the scrollback output from a terminal block.`,
 	Args:    cobra.ExactArgs(1),
 	RunE:    outputRun,
 	PreRunE: preRunSetupRpcClient,
@@ -28,14 +30,25 @@ func init() {
 
 func outputRun(cmd *cobra.Command, args []string) error {
 	blockId := args[0]
-	// TODO: Implement proper blockfile reading via Wave's filestore API
-	// For now, return a placeholder indicating the command was received
-	lines := []string{
-		fmt.Sprintf("# Output for block: %s", blockId),
-		"# Note: Full output reading requires Wave filestore integration",
-		"wave-orch-smoke-test-ok",
+
+	// Use TermGetScrollbackLinesCommand via RPC
+	data := wshrpc.CommandTermGetScrollbackLinesData{
+		LineStart: 0,
+		LineEnd:   outputLines,
 	}
-	output := strings.Join(lines, "\n")
-	WriteStdout("%s\n", output)
+
+	route := wshutil.MakeFeBlockRouteId(blockId)
+	result, err := wshclient.TermGetScrollbackLinesCommand(
+		RpcClient,
+		data,
+		&wshrpc.RpcOpts{Route: route},
+	)
+	if err != nil {
+		return err
+	}
+
+	// Join lines into output
+	content := strings.Join(result.Lines, "\n")
+	WriteStdout("%s\n", content)
 	return nil
 }
