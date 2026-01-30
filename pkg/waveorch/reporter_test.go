@@ -4,6 +4,7 @@
 package waveorch
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -45,12 +46,16 @@ more noise
 func TestReportParser_Parse(t *testing.T) {
 	parser := NewReportParser()
 
+	// 完整有效的 Report
 	input := `<<<REPORT>>>
 {
+  "project_id": "test-project",
   "agent": "claude-code",
   "status": "SUCCESS",
   "round": 1,
-  "summary": "Task completed"
+  "summary": "Task completed",
+  "files_changed": [],
+  "commands_run": []
 }
 <<<END_REPORT>>>`
 
@@ -63,6 +68,51 @@ func TestReportParser_Parse(t *testing.T) {
 	}
 	if report.Status != "SUCCESS" {
 		t.Errorf("status = %q, want SUCCESS", report.Status)
+	}
+}
+
+func TestReportParser_Parse_ValidationErrors(t *testing.T) {
+	parser := NewReportParser()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		{
+			name: "missing project_id",
+			input: `<<<REPORT>>>
+{"agent": "a", "round": 1, "status": "SUCCESS", "summary": "s", "files_changed": [], "commands_run": []}
+<<<END_REPORT>>>`,
+			wantErr: "project_id",
+		},
+		{
+			name: "invalid status",
+			input: `<<<REPORT>>>
+{"project_id": "p", "agent": "a", "round": 1, "status": "INVALID", "summary": "s", "files_changed": [], "commands_run": []}
+<<<END_REPORT>>>`,
+			wantErr: "status",
+		},
+		{
+			name: "invalid json",
+			input: `<<<REPORT>>>
+{not valid json}
+<<<END_REPORT>>>`,
+			wantErr: "json unmarshal failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parser.Parse(tt.input)
+			if err == nil {
+				t.Errorf("expected error containing %q", tt.wantErr)
+				return
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error %q should contain %q", err.Error(), tt.wantErr)
+			}
+		})
 	}
 }
 

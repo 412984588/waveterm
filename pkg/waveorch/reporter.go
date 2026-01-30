@@ -5,6 +5,7 @@ package waveorch
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -54,7 +55,7 @@ func NewReportParser() *ReportParser {
 	}
 }
 
-// Parse 从输出中解析 REPORT
+// Parse 从输出中解析 REPORT，并强制验证必填字段
 func (rp *ReportParser) Parse(output string) (*Report, error) {
 	jsonStr := rp.ExtractJSON(output)
 	if jsonStr == "" {
@@ -62,7 +63,10 @@ func (rp *ReportParser) Parse(output string) (*Report, error) {
 	}
 	var report Report
 	if err := json.Unmarshal([]byte(jsonStr), &report); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("json unmarshal failed: %w", err)
+	}
+	if validErr := ValidateReportStrict(&report); validErr != nil {
+		return nil, fmt.Errorf("report validation failed: %w", validErr)
 	}
 	return &report, nil
 }
