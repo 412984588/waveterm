@@ -128,7 +128,7 @@ for i in "${!PROJECT_BLOCKS[@]}"; do
     echo "Injecting task to $name..."
 
     # Simulate a simple task: list files and report
-    $WSH inject "$block_id" "ls -la && echo '<<<REPORT>>>{\"project\":\"$name\",\"status\":\"SUCCESS\",\"files_changed\":[]}<<<END_REPORT>>>'"
+    $WSH inject --wait "$block_id" "ls -la && echo '<<<REPORT>>>{\"project\":\"$name\",\"status\":\"SUCCESS\",\"files_changed\":[]}<<<END_REPORT>>>'"
 done
 
 # === Wait and Collect ===

@@ -139,7 +139,7 @@ for i in "${!BLOCK_IDS[@]}"; do
     agent_name="${AGENT_NAMES[$i]}"
 
     echo "Injecting to $agent_name ($block_id)..."
-    $WSH inject "$block_id" "echo '<<<REPORT>>>{\"agent\":\"$agent_name\",\"status\":\"SUCCESS\",\"round\":1}<<<END_REPORT>>>'"
+    $WSH inject --wait "$block_id" "echo '<<<REPORT>>>{\"agent\":\"$agent_name\",\"status\":\"SUCCESS\",\"round\":1}<<<END_REPORT>>>'"
 done
 
 # === Wait and Collect ===
