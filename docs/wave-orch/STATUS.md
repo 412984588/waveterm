@@ -1,6 +1,6 @@
 # Wave-Orch 状态追踪
 
-> 最后更新: 2026-01-29 21:06
+> 最后更新: 2026-01-29 23:30
 
 ## 当前里程碑
 
@@ -63,6 +63,13 @@
 - [x] 全局诊断: ~/.wave-orch/logs/YYYY-MM-DD/diagnostic-\*.json
 - [x] 项目诊断: <project>/.wave-orch/diagnostic.json
 
+### ✅ M9: E2E 演示脚本
+
+- [x] scripts/wave_orch_e2e_smoke.sh - E2E 烟雾测试
+- [x] scripts/wave_orch_demo_3_agents.sh - 3-Agent 并行演示
+- [x] scripts/wave_orch_demo_multi_project.sh - 多项目并行演示
+- [x] wsh wave-orch demo 命令
+
 ---
 
 ## 构建验证
@@ -87,10 +94,30 @@ go build -o ./dist/wsh ./cmd/wsh/
 # 项目: <project>/.wave-orch/diagnostic.json
 ```
 
-## 剩余 TODO (2 项)
+## 剩余 TODO (0 项)
 
-1. **E2E 验证**: 在 Wave 内运行 inject/output/wait (需 Wave 运行)
-2. **多 Agent 并行**: 同时启动 3 个 Agent block (需 Wave 运行)
+✅ 所有 MVP 功能已完成！
+
+---
+
+## 演示脚本使用
+
+```bash
+# 1. E2E 烟雾测试（需要 Wave Terminal 运行）
+./scripts/wave_orch_e2e_smoke.sh
+
+# 2. 3-Agent 并行演示
+./scripts/wave_orch_demo_3_agents.sh
+
+# 3. 多项目并行演示
+./scripts/wave_orch_demo_multi_project.sh
+
+# 4. wsh 命令
+wsh wave-orch demo      # 显示可用 Agent
+wsh wave-orch status    # 查看状态
+wsh wave-orch pause     # 暂停编排
+wsh wave-orch resume    # 恢复编排
+```
 
 ---
 
@@ -100,3 +127,5 @@ go build -o ./dist/wsh ./cmd/wsh/
 - `c440ea08` [wave-orch] Add unit tests
 - `7e37387e` [wave-orch] Add verification script
 - `50f59015` [wave-orch] Add cleanup command
+- `5636d035` [wave-orch] add e2e smoke script
+- `2bad4222` [wave-orch] add 3-agent and multi-project demo scripts
