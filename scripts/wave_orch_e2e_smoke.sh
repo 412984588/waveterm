@@ -5,15 +5,17 @@
 set -e
 
 # === Resolve WSH ===
+# 优先使用本地构建的 wsh（包含 inject/output/wait 命令）
 resolve_wsh() {
-    if command -v wsh &>/dev/null; then
-        echo "wsh"
-    elif [[ -f "./dist/bin/wsh-0.13.2-alpha.0-darwin.arm64" ]]; then
+    # 优先本地构建版本
+    if [[ -f "./dist/bin/wsh-0.13.2-alpha.0-darwin.arm64" ]]; then
         echo "./dist/bin/wsh-0.13.2-alpha.0-darwin.arm64"
     else
         local latest=$(ls -t ./dist/bin/wsh-*darwin.arm64 2>/dev/null | head -1)
         if [[ -n "$latest" ]]; then
             echo "$latest"
+        elif command -v wsh &>/dev/null; then
+            echo "wsh"
         else
             echo ""
         fi
