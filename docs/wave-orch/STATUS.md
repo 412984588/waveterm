@@ -1,8 +1,23 @@
 # Wave-Orch 状态追踪
 
-> 最后更新: 2026-01-30 08:15
+> 最后更新: 2026-01-30 09:00
 
 ## 当前里程碑
+
+### ✅ R1: 优化轮次1 基线验证 (2026-01-30 09:00)
+
+**验证结果**:
+```
+go test ./pkg/waveorch/... -v           # ✅ 21/21 PASS
+./scripts/wave_orch_e2e_smoke.sh        # ✅ PASS
+./scripts/wave_orch_demo_3_agents.sh    # ✅ 3/3 PASS
+./scripts/wave_orch_demo_multi_project.sh # ✅ 2/2 PASS
+```
+
+**Codex 审计**: 已注入提示，等待处理中
+**wsh 路径**: `./dist/bin/wsh-0.13.2-alpha.0-darwin.arm64`
+
+---
 
 ### ✅ M12: 幽灵任务计数修复 (2026-01-30 08:15)
 
