@@ -1,8 +1,60 @@
 # Wave-Orch 状态追踪
 
-> 最后更新: 2026-01-30 07:30
+> 最后更新: 2026-01-30 08:15
 
 ## 当前里程碑
+
+### ✅ M12: 幽灵任务计数修复 (2026-01-30 08:15)
+
+**问题**: 会话恢复后显示 "[44 active, 44 pending] The boulder never stops..." 提示，但实际 TaskList 为空。
+
+**根因分析**:
+
+- 提示来自 oh-my-claudecode 插件的 `pre-tool-enforcer.sh` / `pre-tool-enforcer.mjs`
+- 脚本从 `~/.claude/todos/*.json` 读取所有会话的任务缓存并累加计数
+- 旧会话的任务文件未清理，导致计数累积
+
+**源文件位置**:
+
+```
+~/.claude/plugins/cache/omc/oh-my-claudecode/*/scripts/pre-tool-enforcer.sh (line 24-29)
+~/.claude/plugins/cache/omc/oh-my-claudecode/*/scripts/pre-tool-enforcer.mjs (line 35-88)
+```
+
+**缓存文件位置**:
+
+```
+~/.claude/todos/*.json          # 全局任务缓存（主要来源）
+<project>/.omc/todos.json       # 项目本地缓存
+<project>/.claude/todos.json    # 项目本地缓存（备选）
+```
+
+**修复策略**:
+
+- 创建一键清理脚本：`~/.claude/hooks/bin/clear_task_cache.sh`
+- 清理所有旧任务缓存文件
+- 不修改 oh-my-claudecode 插件源码（避免升级覆盖）
+
+**手动清理命令**:
+
+```bash
+~/.claude/hooks/bin/clear_task_cache.sh          # 执行清理
+~/.claude/hooks/bin/clear_task_cache.sh --dry-run  # 预览（不删除）
+```
+
+**验证结果**:
+
+```
+# 清理前
+cat ~/.claude/todos/*.json | grep -c '"pending"'     # 44
+cat ~/.claude/todos/*.json | grep -c '"in_progress"' # 44
+
+# 清理后
+ls ~/.claude/todos/ | wc -l  # 0
+# Hook 提示不再显示 "[44 active, 44 pending]" 前缀
+```
+
+---
 
 ### ✅ M11: Shell Block 修复 (2026-01-30 07:30)
 
@@ -11,18 +63,21 @@
 **解决**: 改用 `wsh launch` + widgets.json 创建 `controller="shell"` 块。
 
 **关键概念**:
+
 - `controller="shell"`: 持久 shell 会话，支持 inject/output
 - `controller="cmd"`: 一次性命令块，不支持 inject
 - `wsh launch <widget-id>`: 从 widgets.json 创建 block
 - `wsh` 需要 Wave 运行提供 access token
 
 **修复内容**:
+
 - [x] 新增 scripts/wave_orch_lib.sh (ensure_shell_widget, launch_shell_block)
 - [x] 重写 wave_orch_demo_3_agents.sh 使用 shell block
 - [x] 重写 wave_orch_demo_multi_project.sh 使用 shell block
 - [x] 修复 JSON 提取（终端换行导致跨行）
 
 **验证结果**:
+
 ```
 go test ./pkg/waveorch/... -v  # ✅ 21/21 PASS
 ./scripts/wave_orch_e2e_smoke.sh  # ✅ PASS
