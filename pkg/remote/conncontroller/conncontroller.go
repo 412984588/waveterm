@@ -454,17 +454,28 @@ func (conn *SSHConn) StartConnServer(ctx context.Context, afterUpdate bool, useR
 	if err != nil {
 		return false, "", "", fmt.Errorf("unable to start conn controller command: %w", err)
 	}
-	linesChan := utilfn.StreamToLinesChan(pipeRead)
+	// Create cancellable context for line reading
+	lineCtx, lineCancel := context.WithCancel(ctx)
+	linesChan := utilfn.StreamToLinesChanWithContext(lineCtx, pipeRead)
+
+	// Helper to cleanup on error: cancel context, close pipe to unblock reader, drain channel
+	cleanupOnError := func() {
+		lineCancel()
+		pipeWrite.Close()
+		utilfn.DrainLinesChan(linesChan)
+		sshSession.Close()
+	}
+
 	versionLine, err := utilfn.ReadLineWithTimeout(linesChan, utilfn.TimeoutFromContext(ctx, 30*time.Second))
 	if err != nil {
-		sshSession.Close()
+		cleanupOnError()
 		return false, "", "", fmt.Errorf("error reading wsh version: %w", err)
 	}
 	conn.Infof(ctx, "actual connnserverversion: %q\n", versionLine)
 	conn.Infof(ctx, "got connserver version: %s\n", strings.TrimSpace(versionLine))
 	isUpToDate, clientVersion, osArchStr, err := IsWshVersionUpToDate(ctx, versionLine)
 	if err != nil {
-		sshSession.Close()
+		cleanupOnError()
 		return false, "", "", fmt.Errorf("error checking wsh version: %w", err)
 	}
 	if isUpToDate && !afterUpdate && os.Getenv(wavebase.WaveWshForceUpdateVarName) != "" {
@@ -473,12 +484,12 @@ func (conn *SSHConn) StartConnServer(ctx context.Context, afterUpdate bool, useR
 	}
 	conn.Infof(ctx, "connserver up-to-date: %v\n", isUpToDate)
 	if !isUpToDate {
-		sshSession.Close()
+		cleanupOnError()
 		return true, clientVersion, osArchStr, nil
 	}
 	jwtLine, err := utilfn.ReadLineWithTimeout(linesChan, 3*time.Second)
 	if err != nil {
-		sshSession.Close()
+		cleanupOnError()
 		return false, clientVersion, "", fmt.Errorf("error reading jwt status line: %w", err)
 	}
 	conn.Infof(ctx, "got jwt status line: %s\n", jwtLine)
@@ -487,7 +498,7 @@ func (conn *SSHConn) StartConnServer(ctx context.Context, afterUpdate bool, useR
 		conn.Infof(ctx, "writing jwt token to connserver\n")
 		_, err = fmt.Fprintf(stdinPipe, "%s\n", jwtToken)
 		if err != nil {
-			sshSession.Close()
+			cleanupOnError()
 			return false, clientVersion, "", fmt.Errorf("failed to write JWT token: %w", err)
 		}
 	}
