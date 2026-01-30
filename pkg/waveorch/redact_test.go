@@ -96,9 +96,9 @@ func TestRedact_GitLab(t *testing.T) {
 
 func TestRedact_Slack(t *testing.T) {
 	tests := []string{
-		"xoxb-REDACTED",
-		"xoxp-123456789012-1234567890123",
-		"xoxa-2-1234567890",
+		"xoxb-FAKE-TEST-TOKEN-FOR-UNIT-TEST-ONLY",
+		"xoxp-FAKE-TEST-TOKEN-ONLY",
+		"xoxa-FAKE-TEST",
 	}
 	for _, token := range tests {
 		result := Redact(token)
