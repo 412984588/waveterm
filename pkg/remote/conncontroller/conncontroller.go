@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -529,15 +530,24 @@ func (conn *SSHConn) StartConnServer(ctx context.Context, afterUpdate bool, useR
 		defer func() {
 			panichandler.PanicHandler("conncontroller:sshSession-output", recover())
 		}()
+		// Only log stdout if explicitly enabled via env var (security: may contain tokens)
+		logStdout := os.Getenv("WAVE_LOG_CONNSERVER_OUTPUT") == "1"
 		for output := range linesChan {
 			if output.Error != nil {
-				log.Printf("[conncontroller:%s:output] error: %v\n", conn.GetName(), output.Error)
+				if logStdout {
+					log.Printf("[conncontroller:%s:output] error: %v\n", conn.GetName(), output.Error)
+				}
+				continue
+			}
+			if !logStdout {
 				continue
 			}
 			line := output.Line
 			if !strings.HasSuffix(line, "\n") {
 				line += "\n"
 			}
+			// Redact sensitive content before logging
+			line = redactConnserverOutput(line)
 			log.Printf("[conncontroller:%s:output] %s", conn.GetName(), line)
 		}
 	}()
@@ -1180,4 +1190,22 @@ func GetConnectionsFromConfig() ([]string, error) {
 	remote.WaveSshConfigUserSettings().ReloadConfigs()
 
 	return resolveSshConfigPatterns(sshConfigFiles)
+}
+
+// redactConnserverOutput masks sensitive content in connserver output before logging.
+// Redacts: JWT tokens, Bearer tokens, API keys, and REPORT JSON content.
+var (
+	jwtPatternConn    = regexp.MustCompile(`eyJ[A-Za-z0-9\-_]+\.eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+`)
+	bearerPatternConn = regexp.MustCompile(`(?i)(Bearer|Authorization)["\s:=]+["']?([A-Za-z0-9\-_\.]+)["']?`)
+	apiKeyPatternConn = regexp.MustCompile(`(?i)(api[_-]?key|token|secret)["\s:=]+["']?([a-zA-Z0-9_\-]{16,})["']?`)
+	reportPatternConn = regexp.MustCompile(`<<<REPORT>>>[\s\S]*?<<<END_REPORT>>>`)
+)
+
+func redactConnserverOutput(line string) string {
+	result := line
+	result = jwtPatternConn.ReplaceAllString(result, "eyJ***REDACTED_JWT***")
+	result = bearerPatternConn.ReplaceAllString(result, "${1}=***REDACTED***")
+	result = apiKeyPatternConn.ReplaceAllString(result, "${1}=***REDACTED***")
+	result = reportPatternConn.ReplaceAllString(result, "<<<REPORT>>>***REDACTED***<<<END_REPORT>>>")
+	return result
 }
