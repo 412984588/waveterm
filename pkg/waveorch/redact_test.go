@@ -98,7 +98,7 @@ func TestRedact_Slack(t *testing.T) {
 	tests := []string{
 		"xoxb-FAKE-TEST-TOKEN-FOR-UNIT-TEST-ONLY",
 		"xoxp-FAKE-TEST-TOKEN-ONLY",
-		"xoxa-FAKE-TEST",
+		"xoxa-FAKE-TEST-X",
 	}
 	for _, token := range tests {
 		result := Redact(token)
