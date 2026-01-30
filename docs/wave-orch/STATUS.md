@@ -87,6 +87,13 @@ go build -o ./dist/wsh ./cmd/wsh/
 # 项目: <project>/.wave-orch/diagnostic.json
 ```
 
+## 剩余 TODO (2 项)
+
+1. **E2E 验证**: 在 Wave 内运行 inject/output/wait (需 Wave 运行)
+2. **多 Agent 并行**: 同时启动 3 个 Agent block (需 Wave 运行)
+
+---
+
 ## 已提交
 
 - `aa3b6394` [wave-orch] Implement core modules
