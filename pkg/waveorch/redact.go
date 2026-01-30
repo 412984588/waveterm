@@ -26,18 +26,42 @@ var (
 	emailPattern = regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`)
 
 	// Chinese phone number
-	phonePattern = regexp.MustCompile(`1[3-9]\d{9}`)
+	phonePatternCN = regexp.MustCompile(`1[3-9]\d{9}`)
 
-	// AWS keys
+	// International phone: +1-xxx, +86-xxx, +44-xxx etc (various separators)
+	phonePatternIntl = regexp.MustCompile(`\+\d{1,3}[-.\s]?\d{2,4}[-.\s]?\d{2,4}[-.\s]?\d{2,4}[-.\s]?\d{0,4}`)
+
+	// AWS Access Key ID
 	awsKeyPattern = regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
+
+	// AWS Secret Access Key (40 chars base64-like)
+	awsSecretPattern = regexp.MustCompile(`(?i)(aws_secret_access_key|aws_secret)["\s:=]+["']?([A-Za-z0-9/+=]{40})["']?`)
 
 	// GitHub tokens
 	githubTokenPattern = regexp.MustCompile(`gh[pousr]_[A-Za-z0-9_]{36,}`)
+
+	// GitLab tokens: glpat-xxx, glptt-xxx
+	gitlabTokenPattern = regexp.MustCompile(`gl(pat|ptt)-[A-Za-z0-9\-_]{20,}`)
+
+	// Slack tokens: xoxb-, xoxp-, xoxa-, xoxs-
+	slackTokenPattern = regexp.MustCompile(`xox[bpas]-[A-Za-z0-9\-]{10,}`)
+
+	// JWT/Bearer tokens in Authorization header
+	bearerPattern = regexp.MustCompile(`(?i)(Bearer|Authorization)["\s:=]+["']?([A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+)["']?`)
+
+	// Generic JWT pattern (three base64 parts separated by dots)
+	jwtPattern = regexp.MustCompile(`eyJ[A-Za-z0-9\-_]+\.eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+`)
 )
 
 // Redact 对字符串进行脱敏处理
 func Redact(input string) string {
 	result := input
+
+	// JWT tokens (must be before Bearer to avoid double processing)
+	result = jwtPattern.ReplaceAllString(result, "eyJ***REDACTED_JWT***")
+
+	// Bearer/Authorization header with JWT
+	result = bearerPattern.ReplaceAllString(result, "${1}=***REDACTED_TOKEN***")
 
 	// OpenAI keys: 保留前缀
 	result = openAIKeyPattern.ReplaceAllStringFunc(result, func(s string) string {
@@ -49,13 +73,32 @@ func Redact(input string) string {
 		return "sk-ant-***REDACTED***"
 	})
 
-	// AWS keys
+	// AWS Access Key ID
 	result = awsKeyPattern.ReplaceAllString(result, "AKIA***REDACTED***")
+
+	// AWS Secret Access Key
+	result = awsSecretPattern.ReplaceAllString(result, "${1}=***REDACTED***")
 
 	// GitHub tokens
 	result = githubTokenPattern.ReplaceAllStringFunc(result, func(s string) string {
 		if len(s) > 4 {
 			return s[:4] + "_***REDACTED***"
+		}
+		return "***REDACTED***"
+	})
+
+	// GitLab tokens
+	result = gitlabTokenPattern.ReplaceAllStringFunc(result, func(s string) string {
+		if len(s) > 6 {
+			return s[:6] + "-***REDACTED***"
+		}
+		return "***REDACTED***"
+	})
+
+	// Slack tokens
+	result = slackTokenPattern.ReplaceAllStringFunc(result, func(s string) string {
+		if len(s) > 5 {
+			return s[:5] + "-***REDACTED***"
 		}
 		return "***REDACTED***"
 	})
@@ -66,8 +109,16 @@ func Redact(input string) string {
 	// Emails: 保留域名结构
 	result = emailPattern.ReplaceAllString(result, "***@***.***")
 
-	// Phone numbers
-	result = phonePattern.ReplaceAllStringFunc(result, func(s string) string {
+	// International phone numbers (before CN to avoid partial match)
+	result = phonePatternIntl.ReplaceAllStringFunc(result, func(s string) string {
+		if len(s) >= 3 {
+			return s[:3] + "***REDACTED***"
+		}
+		return "***REDACTED***"
+	})
+
+	// Chinese phone numbers
+	result = phonePatternCN.ReplaceAllStringFunc(result, func(s string) string {
 		if len(s) >= 3 {
 			return s[:3] + "********"
 		}

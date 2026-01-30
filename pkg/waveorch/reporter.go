@@ -91,16 +91,55 @@ func (rp *ReportParser) ContainsReport(output string) bool {
 	return strings.Contains(output, rp.startMarker) && strings.Contains(output, rp.endMarker)
 }
 
-// ValidateReport 验证 Report 必填字段
-func ValidateReport(r *Report) bool {
+// ValidationError 验证错误详情
+type ValidationError struct {
+	Field   string
+	Message string
+}
+
+func (e *ValidationError) Error() string {
+	return e.Field + ": " + e.Message
+}
+
+// ValidateReportStrict 严格验证 Report，返回具体错误
+func ValidateReportStrict(r *Report) *ValidationError {
 	if r == nil {
-		return false
+		return &ValidationError{Field: "report", Message: "report is nil"}
 	}
-	if r.Agent == "" || r.Status == "" {
-		return false
+	if r.ProjectID == "" {
+		return &ValidationError{Field: "project_id", Message: "must not be empty"}
+	}
+	if r.Agent == "" {
+		return &ValidationError{Field: "agent", Message: "must not be empty"}
+	}
+	if r.Round <= 0 {
+		return &ValidationError{Field: "round", Message: "must be > 0"}
+	}
+	if r.Status == "" {
+		return &ValidationError{Field: "status", Message: "must not be empty"}
 	}
 	validStatus := map[string]bool{"SUCCESS": true, "FAIL": true, "BLOCKED": true, "PARTIAL": true}
-	return validStatus[r.Status]
+	if !validStatus[r.Status] {
+		return &ValidationError{Field: "status", Message: "must be SUCCESS/FAIL/BLOCKED/PARTIAL"}
+	}
+	if r.Summary == "" {
+		return &ValidationError{Field: "summary", Message: "must not be empty"}
+	}
+	if r.FilesChanged == nil {
+		return &ValidationError{Field: "files_changed", Message: "must be present (can be empty array)"}
+	}
+	if r.CommandsRun == nil {
+		return &ValidationError{Field: "commands_run", Message: "must be present (can be empty array)"}
+	}
+	if r.NeedsHuman && r.NeedsReason == "" {
+		return &ValidationError{Field: "needs_human_reason", Message: "required when needs_human=true"}
+	}
+	return nil
+}
+
+// ValidateReport 验证 Report 必填字段（兼容旧接口）
+func ValidateReport(r *Report) bool {
+	return ValidateReportStrict(r) == nil
 }
 
 // ReportStatusPattern 用于快速检测状态的正则

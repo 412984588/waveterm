@@ -80,9 +80,19 @@ func getPausedFilePath() string {
 	return filepath.Join(getWaveOrchStateDir(), "paused")
 }
 
+// isPaused checks if Wave-Orch is paused. Fail-closed: any error except
+// "file not found" is treated as paused for safety.
 func isPaused() bool {
 	_, err := os.Stat(getPausedFilePath())
-	return err == nil
+	if err == nil {
+		return true // pause file exists
+	}
+	if os.IsNotExist(err) {
+		return false // pause file doesn't exist, not paused
+	}
+	// Any other error (permission denied, etc.) -> fail-closed
+	fmt.Fprintf(os.Stderr, "WARN: kill switch check failed (fail-closed): %v\n", err)
+	return true
 }
 
 func waveOrchStatusRun(cmd *cobra.Command, args []string) error {
@@ -118,6 +128,11 @@ func waveOrchResumeRun(cmd *cobra.Command, args []string) error {
 }
 
 func waveOrchCleanupRun(cmd *cobra.Command, args []string) error {
+	// Validate days >= 1
+	if cleanupDays < 1 {
+		return fmt.Errorf("days must be >= 1, got %d", cleanupDays)
+	}
+
 	home, _ := os.UserHomeDir()
 	logsDir := filepath.Join(home, ".wave-orch", "logs")
 
@@ -130,13 +145,19 @@ func waveOrchCleanupRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	cutoff := time.Now().AddDate(0, 0, -cleanupDays)
 	cleaned := 0
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		info, _ := entry.Info()
-		if info.ModTime().Before(cutoffTime(cleanupDays)) {
+		// Parse directory name as date (YYYY-MM-DD format)
+		dirDate, err := time.Parse("2006-01-02", entry.Name())
+		if err != nil {
+			// Skip directories that don't match date format
+			continue
+		}
+		if dirDate.Before(cutoff) {
 			os.RemoveAll(filepath.Join(logsDir, entry.Name()))
 			cleaned++
 		}
