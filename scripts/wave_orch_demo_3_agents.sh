@@ -1,165 +1,110 @@
 #!/bin/bash
 # Wave-Orch 3-Agent Parallel Demo
-# 演示同时启动 Claude/Codex/Gemini 三个 Agent
+# 使用 shell block (controller=shell) 而非 cmd block
 
 set -e
 
-# === Resolve WSH ===
-# 优先使用本地构建的 wsh（包含 inject/output/wait 命令）
-resolve_wsh() {
-    if [[ -f "./dist/bin/wsh-0.13.2-alpha.0-darwin.arm64" ]]; then
-        echo "./dist/bin/wsh-0.13.2-alpha.0-darwin.arm64"
-    else
-        local latest=$(ls -t ./dist/bin/wsh-*darwin.arm64 2>/dev/null | head -1)
-        if [[ -n "$latest" ]]; then
-            echo "$latest"
-        elif command -v wsh &>/dev/null; then
-            echo "wsh"
-        else
-            echo ""
-        fi
-    fi
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/wave_orch_lib.sh"
 
 WSH=$(resolve_wsh)
 if [[ -z "$WSH" ]]; then
-    echo "❌ wsh not found. Build with: task build:backend"
+    echo "❌ wsh not found"
     exit 1
 fi
 echo "✅ WSH: $WSH"
 
 # === Check jq ===
 if ! command -v jq &>/dev/null; then
-    echo "❌ jq not found. Install with: brew install jq"
+    echo "❌ jq not found"
     exit 1
 fi
 
 # === Check Wave Running ===
 echo "--- Checking Wave connection ---"
-if ! $WSH blocks list --view=term --json 2>/dev/null; then
-    echo ""
+if ! $WSH blocks list --view=term --json &>/dev/null; then
     echo "❌ Cannot connect to Wave Terminal"
-    echo "   请先打开 Wave Terminal 并保持运行"
+    echo "   请先打开 Wave 并保持运行"
     exit 2
 fi
+echo "✅ Wave connected"
 
 # === Detect Available Agents ===
-echo ""
-echo "--- Detecting available agents ---"
+echo "--- Detecting agents ---"
+AGENTS=()
+for cli in claude codex gemini; do
+    if check_cli_available "$cli"; then
+        AGENTS+=("$cli")
+        echo "✅ $cli"
+    else
+        echo "⚠️ $cli not found"
+    fi
+done
 
-CLAUDE_CMD=""
-CODEX_CMD=""
-GEMINI_CMD=""
-
-if command -v claude &>/dev/null; then
-    CLAUDE_CMD="claude"
-    echo "✅ Claude CLI: $CLAUDE_CMD"
-else
-    echo "⚠️ Claude CLI not found"
-fi
-
-if command -v codex &>/dev/null; then
-    CODEX_CMD="codex"
-    echo "✅ Codex CLI: $CODEX_CMD"
-else
-    echo "⚠️ Codex CLI not found"
-fi
-
-if command -v gemini &>/dev/null; then
-    GEMINI_CMD="gemini"
-    echo "✅ Gemini CLI: $GEMINI_CMD"
-else
-    echo "⚠️ Gemini CLI not found"
-fi
-
-AGENT_COUNT=0
-[[ -n "$CLAUDE_CMD" ]] && ((AGENT_COUNT++))
-[[ -n "$CODEX_CMD" ]] && ((AGENT_COUNT++))
-[[ -n "$GEMINI_CMD" ]] && ((AGENT_COUNT++))
-
-if [[ $AGENT_COUNT -eq 0 ]]; then
+if [[ ${#AGENTS[@]} -eq 0 ]]; then
     echo "❌ No agent CLI found"
     exit 3
 fi
-echo ""
-echo "✅ Found $AGENT_COUNT agent(s)"
 
-# === Create Agent Blocks ===
-echo ""
-echo "--- Creating agent blocks ---"
+# === Ensure Shell Widget ===
+echo "--- Ensuring shell widget ---"
+ensure_shell_widget "$WSH" || exit 4
 
+# === Launch Shell Blocks ===
+echo "--- Launching shell blocks ---"
 declare -a BLOCK_IDS
-declare -a AGENT_NAMES
 
-# Function to create agent block
-create_agent_block() {
-    local name=$1
-    local cmd=$2
-
-    echo "Creating block for $name..."
-    # Use wsh run to create a new terminal block
-    $WSH run bash -c "echo '=== $name Agent Ready ===' && sleep 1" &>/dev/null || true
-    sleep 1
-
-    # Get the latest block
-    local blocks=$($WSH blocks list --view=term --json 2>/dev/null || echo "[]")
-    local block_id=$(echo "$blocks" | jq -r '.[0].blockid // empty')
-
-    if [[ -n "$block_id" ]]; then
-        echo "✅ $name block: $block_id"
-        BLOCK_IDS+=("$block_id")
-        AGENT_NAMES+=("$name")
-    else
-        echo "⚠️ Failed to create $name block"
+for agent in "${AGENTS[@]}"; do
+    BLOCK_ID=$(launch_shell_block "$WSH")
+    if [[ -z "$BLOCK_ID" ]]; then
+        echo "❌ Failed to launch block for $agent"
+        exit 5
     fi
-}
-
-# Create blocks for available agents
-if [[ -n "$CLAUDE_CMD" ]]; then
-    create_agent_block "Claude" "$CLAUDE_CMD"
-fi
-
-if [[ -n "$CODEX_CMD" ]]; then
-    create_agent_block "Codex" "$CODEX_CMD"
-fi
-
-if [[ -n "$GEMINI_CMD" ]]; then
-    create_agent_block "Gemini" "$GEMINI_CMD"
-fi
-
-echo ""
-echo "--- Created ${#BLOCK_IDS[@]} agent blocks ---"
-
-# === Inject Test Commands ===
-echo ""
-echo "--- Injecting test commands ---"
-
-for i in "${!BLOCK_IDS[@]}"; do
-    block_id="${BLOCK_IDS[$i]}"
-    agent_name="${AGENT_NAMES[$i]}"
-
-    echo "Injecting to $agent_name ($block_id)..."
-    $WSH inject --wait "$block_id" "echo '<<<REPORT>>>{\"agent\":\"$agent_name\",\"status\":\"SUCCESS\",\"round\":1}<<<END_REPORT>>>'"
+    BLOCK_IDS+=("$BLOCK_ID")
+    echo "✅ $agent block: $BLOCK_ID"
 done
 
-# === Wait and Collect ===
-echo ""
-echo "--- Waiting for outputs ---"
-sleep 2
+# === Inject REPORT Commands ===
+echo "--- Injecting REPORT commands ---"
+PASS_COUNT=0
 
-for i in "${!BLOCK_IDS[@]}"; do
-    block_id="${BLOCK_IDS[$i]}"
-    agent_name="${AGENT_NAMES[$i]}"
+for i in "${!AGENTS[@]}"; do
+    agent="${AGENTS[$i]}"
+    block="${BLOCK_IDS[$i]}"
 
-    echo ""
-    echo "=== $agent_name Output ==="
-    $WSH output "$block_id" --lines=5 2>/dev/null || echo "(no output)"
+    REPORT_CMD="echo '<<<REPORT>>>{\"agent\":\"$agent\",\"status\":\"SUCCESS\",\"round\":1,\"project_id\":\"demo\",\"summary\":\"$agent ready\",\"files_changed\":[],\"commands_run\":[]}<<<END_REPORT>>>'"
+
+    $WSH inject --wait "$block" "$REPORT_CMD" &>/dev/null || {
+        echo "❌ $agent inject failed"
+        continue
+    }
+
+    sleep 1
+    OUTPUT=$($WSH output "$block" --lines=20 2>/dev/null || echo "")
+
+    if echo "$OUTPUT" | grep -q "<<<REPORT>>>"; then
+        JSON=$(echo "$OUTPUT" | grep -o '<<<REPORT>>>.*<<<END_REPORT>>>' | sed 's/<<<REPORT>>>//;s/<<<END_REPORT>>>//')
+        if echo "$JSON" | jq -e '.agent and .status' &>/dev/null; then
+            STATUS=$(echo "$JSON" | jq -r '.status')
+            echo "✅ $agent: $STATUS"
+            ((PASS_COUNT++))
+        else
+            echo "⚠️ $agent: invalid JSON"
+        fi
+    else
+        echo "⚠️ $agent: no REPORT found"
+    fi
 done
 
 # === Summary ===
 echo ""
-echo "=== 3-AGENT DEMO COMPLETE ==="
-echo "Blocks created: ${#BLOCK_IDS[@]}"
-for i in "${!BLOCK_IDS[@]}"; do
-    echo "  - ${AGENT_NAMES[$i]}: ${BLOCK_IDS[$i]}"
-done
+echo "=== 3-AGENT DEMO RESULT ==="
+echo "Agents: ${#AGENTS[@]}, Passed: $PASS_COUNT"
+
+if [[ $PASS_COUNT -eq ${#AGENTS[@]} ]]; then
+    echo "=== PASS ✅ ==="
+    exit 0
+else
+    echo "=== PARTIAL ==="
+    exit 0
+fi
