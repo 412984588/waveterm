@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/wavetermdev/waveterm/pkg/waveorch"
 )
 
 var waveOrchCmd = &cobra.Command{
@@ -36,10 +38,27 @@ var waveOrchResumeCmd = &cobra.Command{
 	RunE:  waveOrchResumeRun,
 }
 
+var waveOrchCleanupCmd = &cobra.Command{
+	Use:   "cleanup",
+	Short: "cleanup old logs",
+	RunE:  waveOrchCleanupRun,
+}
+
+var waveOrchDiagnosticCmd = &cobra.Command{
+	Use:   "diagnostic",
+	Short: "generate environment diagnostic snapshot",
+	RunE:  waveOrchDiagnosticRun,
+}
+
+var cleanupDays int
+var diagnosticProject string
+
 func init() {
 	waveOrchCmd.AddCommand(waveOrchStatusCmd)
 	waveOrchCmd.AddCommand(waveOrchPauseCmd)
 	waveOrchCmd.AddCommand(waveOrchResumeCmd)
+	waveOrchCleanupCmd.Flags().IntVar(&cleanupDays, "days", 7, "retention days")
+	waveOrchCmd.AddCommand(waveOrchCleanupCmd)
 	rootCmd.AddCommand(waveOrchCmd)
 }
 
@@ -87,4 +106,36 @@ func waveOrchResumeRun(cmd *cobra.Command, args []string) error {
 	}
 	WriteStdout("Wave-Orch resumed\n")
 	return nil
+}
+
+func waveOrchCleanupRun(cmd *cobra.Command, args []string) error {
+	home, _ := os.UserHomeDir()
+	logsDir := filepath.Join(home, ".wave-orch", "logs")
+
+	entries, err := os.ReadDir(logsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			WriteStdout("No logs to clean\n")
+			return nil
+		}
+		return err
+	}
+
+	cleaned := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		info, _ := entry.Info()
+		if info.ModTime().Before(cutoffTime(cleanupDays)) {
+			os.RemoveAll(filepath.Join(logsDir, entry.Name()))
+			cleaned++
+		}
+	}
+	WriteStdout("Cleaned %d old log directories\n", cleaned)
+	return nil
+}
+
+func cutoffTime(days int) time.Time {
+	return time.Now().AddDate(0, 0, -days)
 }

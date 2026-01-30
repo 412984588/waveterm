@@ -122,3 +122,13 @@ func (pt *ProjectTracker) SaveToFile(projectPath string) error {
 	}
 	return os.WriteFile(filepath.Join(orchDir, "state.json"), data, 0644)
 }
+
+// SetBranch 设置项目分支
+func (pt *ProjectTracker) SetBranch(projectPath, branchName string) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	if state, ok := pt.projects[projectPath]; ok {
+		state.Branch = branchName
+		state.UpdatedAt = time.Now()
+	}
+}
