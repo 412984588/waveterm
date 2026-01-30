@@ -44,17 +44,17 @@ func (l *Logger) Log(level, component, message string, data any) error {
 		Level:     level,
 		Component: component,
 		Message:   Redact(message),
-		Data:      data,
+		Data:      RedactAny(data),
 	}
 
 	today := time.Now().Format("2006-01-02")
 	logDir := filepath.Join(l.baseDir, today)
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0700); err != nil {
 		return err
 	}
 
 	logFile := filepath.Join(logDir, "wave-orch.jsonl")
-	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}

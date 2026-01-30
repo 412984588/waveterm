@@ -149,14 +149,14 @@ func (ci *ConfigInspector) scanProject(projectPath string) *ProjectDiag {
 // SaveDiagnostic 保存诊断快照到文件
 func (ci *ConfigInspector) SaveDiagnostic(snapshot *DiagnosticSnapshot, outputPath string) error {
 	dir := filepath.Dir(outputPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(outputPath, data, 0644)
+	return os.WriteFile(outputPath, data, 0600)
 }
 
 // GetGlobalLogDir 获取全局日志目录

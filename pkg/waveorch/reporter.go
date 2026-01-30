@@ -73,11 +73,16 @@ func (rp *ReportParser) ExtractJSON(output string) string {
 	if startIdx == -1 {
 		return ""
 	}
-	endIdx := strings.Index(output, rp.endMarker)
-	if endIdx == -1 || endIdx <= startIdx {
+	searchStart := startIdx + len(rp.startMarker)
+	endRel := strings.Index(output[searchStart:], rp.endMarker)
+	if endRel == -1 {
 		return ""
 	}
-	jsonStr := output[startIdx+len(rp.startMarker) : endIdx]
+	endIdx := searchStart + endRel
+	if endIdx <= startIdx {
+		return ""
+	}
+	jsonStr := output[searchStart:endIdx]
 	return strings.TrimSpace(jsonStr)
 }
 

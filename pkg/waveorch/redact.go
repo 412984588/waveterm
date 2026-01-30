@@ -5,6 +5,8 @@
 package waveorch
 
 import (
+	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -88,6 +90,69 @@ func RedactMap(m map[string]string) map[string]string {
 		}
 	}
 	return result
+}
+
+// RedactAny 对任意类型进行脱敏处理，返回 JSON 友好的结构
+func RedactAny(input any) any {
+	if input == nil {
+		return nil
+	}
+	switch v := input.(type) {
+	case string:
+		return Redact(v)
+	case []byte:
+		return Redact(string(v))
+	case error:
+		return Redact(v.Error())
+	case map[string]string:
+		return RedactMap(v)
+	case map[string]any:
+		return redactInterface(v)
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			out = append(out, Redact(item))
+		}
+		return out
+	case []any:
+		return redactInterface(v)
+	}
+
+	// Fallback: marshal/unmarshal to JSON-friendly types, then redact recursively.
+	b, err := json.Marshal(input)
+	if err != nil {
+		return Redact(fmt.Sprintf("%v", input))
+	}
+	var decoded any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		return Redact(fmt.Sprintf("%v", input))
+	}
+	return redactInterface(decoded)
+}
+
+func redactInterface(input any) any {
+	switch v := input.(type) {
+	case string:
+		return Redact(v)
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			out = append(out, redactInterface(item))
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, val := range v {
+			if containsSensitiveKeyword(strings.ToLower(k)) {
+				out[k] = "***REDACTED***"
+				continue
+			}
+			out[k] = redactInterface(val)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 // containsSensitiveKeyword 检查 key 名称是否包含敏感关键词

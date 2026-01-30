@@ -53,9 +53,9 @@ func NewEngine(registry *AgentRegistry, maxParallel int) *Engine {
 // SubmitTask 提交任务
 func (e *Engine) SubmitTask(projectPath, prompt, preferredAgent string) (*Task, error) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	if e.paused {
+		e.mu.Unlock()
 		return nil, fmt.Errorf("engine is paused")
 	}
 
@@ -70,8 +70,17 @@ func (e *Engine) SubmitTask(projectPath, prompt, preferredAgent string) (*Task, 
 	}
 
 	e.tasks[task.ID] = task
-	e.taskQueue <- task
-	return task, nil
+	e.mu.Unlock()
+
+	select {
+	case e.taskQueue <- task:
+		return task, nil
+	default:
+		e.mu.Lock()
+		delete(e.tasks, task.ID)
+		e.mu.Unlock()
+		return nil, fmt.Errorf("task queue full")
+	}
 }
 
 // Pause 暂停引擎

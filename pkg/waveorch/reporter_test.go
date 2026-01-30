@@ -23,6 +23,25 @@ More text`
 	}
 }
 
+func TestReportParser_ExtractJSON_MultipleReports(t *testing.T) {
+	parser := NewReportParser()
+
+	input := `noise
+<<<REPORT>>>
+{"agent":"a","status":"SUCCESS"}
+<<<END_REPORT>>>
+more noise
+<<<REPORT>>>
+{"agent":"b","status":"FAIL"}
+<<<END_REPORT>>>`
+
+	json := parser.ExtractJSON(input)
+	expected := `{"agent":"a","status":"SUCCESS"}`
+	if json != expected {
+		t.Errorf("got %q, want %q", json, expected)
+	}
+}
+
 func TestReportParser_Parse(t *testing.T) {
 	parser := NewReportParser()
 

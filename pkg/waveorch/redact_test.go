@@ -59,6 +59,51 @@ func TestRedactMap(t *testing.T) {
 	}
 }
 
+func TestRedactAny_Map(t *testing.T) {
+	input := map[string]any{
+		"api_key": "sk-1234567890abcdef",
+		"note":    "hello",
+		"nested": map[string]any{
+			"email": "test@example.com",
+		},
+	}
+	out, ok := RedactAny(input).(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", out)
+	}
+	if out["api_key"] != "***REDACTED***" {
+		t.Errorf("api_key should be fully redacted, got: %v", out["api_key"])
+	}
+	if out["note"] != "hello" {
+		t.Errorf("note should remain unchanged, got: %v", out["note"])
+	}
+	nested, ok := out["nested"].(map[string]any)
+	if !ok {
+		t.Fatalf("nested should be map, got %T", out["nested"])
+	}
+	if nested["email"] == "test@example.com" {
+		t.Error("email should be redacted")
+	}
+}
+
+func TestRedactAny_Struct(t *testing.T) {
+	type payload struct {
+		Token string `json:"token"`
+		Note  string `json:"note"`
+	}
+	input := payload{Token: "sk-1234567890abcdef", Note: "ok"}
+	out, ok := RedactAny(input).(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T", out)
+	}
+	if out["token"] == "sk-1234567890abcdef" {
+		t.Error("token should be redacted")
+	}
+	if out["note"] != "ok" {
+		t.Errorf("note should remain ok, got: %v", out["note"])
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
 }

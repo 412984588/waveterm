@@ -112,7 +112,7 @@ func (pt *ProjectTracker) SaveToFile(projectPath string) error {
 	}
 
 	orchDir := GetProjectOrchDir(projectPath)
-	if err := os.MkdirAll(orchDir, 0755); err != nil {
+	if err := os.MkdirAll(orchDir, 0700); err != nil {
 		return err
 	}
 
@@ -120,7 +120,7 @@ func (pt *ProjectTracker) SaveToFile(projectPath string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(orchDir, "state.json"), data, 0644)
+	return os.WriteFile(filepath.Join(orchDir, "state.json"), data, 0600)
 }
 
 // SetBranch 设置项目分支

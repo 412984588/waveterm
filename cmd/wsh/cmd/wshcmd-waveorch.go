@@ -96,10 +96,10 @@ func waveOrchStatusRun(cmd *cobra.Command, args []string) error {
 
 func waveOrchPauseRun(cmd *cobra.Command, args []string) error {
 	stateDir := getWaveOrchStateDir()
-	if err := os.MkdirAll(stateDir, 0755); err != nil {
+	if err := os.MkdirAll(stateDir, 0700); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
-	f, err := os.Create(getPausedFilePath())
+	f, err := os.OpenFile(getPausedFilePath(), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("create pause file: %w", err)
 	}
