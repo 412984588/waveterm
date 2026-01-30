@@ -59,6 +59,8 @@ func init() {
 	waveOrchCmd.AddCommand(waveOrchResumeCmd)
 	waveOrchCleanupCmd.Flags().IntVar(&cleanupDays, "days", 7, "retention days")
 	waveOrchCmd.AddCommand(waveOrchCleanupCmd)
+	waveOrchDiagnosticCmd.Flags().StringVar(&diagnosticProject, "project", "", "project path to diagnose")
+	waveOrchCmd.AddCommand(waveOrchDiagnosticCmd)
 	rootCmd.AddCommand(waveOrchCmd)
 }
 
@@ -138,4 +140,48 @@ func waveOrchCleanupRun(cmd *cobra.Command, args []string) error {
 
 func cutoffTime(days int) time.Time {
 	return time.Now().AddDate(0, 0, -days)
+}
+
+func waveOrchDiagnosticRun(cmd *cobra.Command, args []string) error {
+	// 检查 kill switch
+	if isPaused() {
+		WriteStdout("Wave-Orch paused - diagnostic skipped\n")
+		return nil
+	}
+
+	// 初始化 Agent 注册表
+	registry := waveorch.NewAgentRegistry()
+	registry.InitDefaultAgents()
+	registry.DetectAvailableAgents()
+
+	// 创建配置检查器
+	inspector := waveorch.NewConfigInspector(registry)
+
+	// 生成诊断快照
+	snapshot := inspector.GenerateDiagnostic(diagnosticProject)
+
+	// 保存到全局日志目录
+	globalDir := waveorch.GetGlobalLogDir()
+	timestamp := time.Now().Format("20060102-150405")
+	globalPath := filepath.Join(globalDir, fmt.Sprintf("diagnostic-%s.json", timestamp))
+	if err := inspector.SaveDiagnostic(snapshot, globalPath); err != nil {
+		return fmt.Errorf("save global diagnostic: %w", err)
+	}
+	WriteStdout("Global diagnostic: %s\n", globalPath)
+
+	// 如果指定了项目，也保存到项目目录
+	if diagnosticProject != "" {
+		projectDir := waveorch.GetProjectOrchDir(diagnosticProject)
+		projectPath := filepath.Join(projectDir, "diagnostic.json")
+		if err := inspector.SaveDiagnostic(snapshot, projectPath); err != nil {
+			return fmt.Errorf("save project diagnostic: %w", err)
+		}
+		WriteStdout("Project diagnostic: %s\n", projectPath)
+	}
+
+	// 清理旧日志
+	logger := waveorch.NewLogger(7)
+	logger.CleanOldLogs()
+
+	return nil
 }
