@@ -55,9 +55,17 @@ fi
 select_block_by_cwd() {
     local blocks_json="$1"
     local cwd="$2"
-    echo "$blocks_json" | jq -r --arg cwd "$cwd" '
-      map(select(.view=="term" and .meta["cmd:cwd"]==$cwd)) | .[-1].blockid // empty
-    '
+    local matches
+    matches=$(echo "$blocks_json" | jq -r --arg cwd "$cwd" '
+      map(select(.view=="term" and .meta["cmd:cwd"]==$cwd))
+    ')
+    local count
+    count=$(echo "$matches" | jq -r 'length')
+    if [[ "$count" -eq 1 ]]; then
+        echo "$matches" | jq -r '.[0].blockid // empty'
+    else
+        echo ""
+    fi
 }
 
 redact_output() {
@@ -77,7 +85,7 @@ BLOCKS_JSON=$($WSH blocks list --view=term --json 2>/dev/null || echo "[]")
 BLOCK_ID=$(select_block_by_cwd "$BLOCKS_JSON" "$EXPECTED_CWD")
 
 if [[ -z "$BLOCK_ID" ]]; then
-    echo "No terminal block found for cwd: $EXPECTED_CWD"
+    echo "No unique terminal block found for cwd: $EXPECTED_CWD"
     echo "Creating a fresh shell block..."
     ensure_shell_widget "$WSH" >/dev/null 2>&1 || true
     BLOCK_ID=$(launch_shell_block "$WSH" || echo "")
@@ -99,7 +107,8 @@ echo "Expected cwd: $EXPECTED_CWD"
 
 # === Inject ===
 echo "--- Injecting command ---"
-$WSH inject --wait "$BLOCK_ID" 'echo "wave-orch-smoke-test-ok"' &>/dev/null
+INJECT_CMD="cd \"$EXPECTED_CWD\" && echo \"wave-orch-smoke-test-ok\""
+$WSH inject --wait "$BLOCK_ID" "$INJECT_CMD" &>/dev/null
 echo "✅ Injected"
 
 # === Wait ===
