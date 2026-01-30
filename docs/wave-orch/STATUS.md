@@ -1,6 +1,6 @@
 # Wave-Orch 状态追踪
 
-> 最后更新: 2026-01-29 23:30
+> 最后更新: 2026-01-30 00:15
 
 ## 当前里程碑
 
@@ -69,6 +69,14 @@
 - [x] scripts/wave_orch_demo_3_agents.sh - 3-Agent 并行演示
 - [x] scripts/wave_orch_demo_multi_project.sh - 多项目并行演示
 - [x] wsh wave-orch demo 命令
+
+### ✅ M10: E2E 实测验证 (2026-01-30)
+
+- [x] wsh inject: 成功 (injected 29 bytes)
+- [x] wsh run: 成功创建 block
+- [x] wsh wave-orch demo: 检测到 3 个 Agent (gemini, claude-code, codex)
+- [x] wsh wave-orch status: 正常 (paused: false)
+- [ ] wsh output: 需要重启 Wave Terminal 使用新版本
 
 ---
 
