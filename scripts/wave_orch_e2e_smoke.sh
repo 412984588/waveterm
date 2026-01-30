@@ -4,6 +4,13 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/wave_orch_lib.sh"
+
+# 期望的 cwd（优先使用调用方环境变量）
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+EXPECTED_CWD="${EXPECTED_CWD:-$REPO_ROOT}"
+
 # === Resolve WSH ===
 # 优先使用本地构建的 wsh（包含 inject/output/wait 命令）
 resolve_wsh() {
@@ -45,16 +52,40 @@ if ! $WSH blocks list --view=term --json 2>/dev/null; then
 fi
 
 # === Get or Create Block ===
+select_block_by_cwd() {
+    local blocks_json="$1"
+    local cwd="$2"
+    echo "$blocks_json" | jq -r --arg cwd "$cwd" '
+      map(select(.view=="term" and .meta["cmd:cwd"]==$cwd)) | .[-1].blockid // empty
+    '
+}
+
+redact_output() {
+    sed -E \
+        -e 's/(xox[baprs]-[A-Za-z0-9-]+)/REDACTED/g' \
+        -e 's/(gh[pousr]_[A-Za-z0-9_]+)/REDACTED/g' \
+        -e 's/(github_pat_[A-Za-z0-9_]+)/REDACTED/g' \
+        -e 's/(sk-[A-Za-z0-9]{8,})/REDACTED/g' \
+        -e 's/(AIzaSy[ A-Za-z0-9_-]{10,})/REDACTED/g' \
+        -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._-]+/\1REDACTED/Ig' \
+        -e 's/(authorization:[[:space:]]*)([^[:space:]]+)/\1REDACTED/Ig' \
+        -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/REDACTED/g'
+}
+
 echo "--- Getting terminal block ---"
 BLOCKS_JSON=$($WSH blocks list --view=term --json 2>/dev/null || echo "[]")
-BLOCK_ID=$(echo "$BLOCKS_JSON" | jq -r '.[0].blockid // empty')
+BLOCK_ID=$(select_block_by_cwd "$BLOCKS_JSON" "$EXPECTED_CWD")
 
 if [[ -z "$BLOCK_ID" ]]; then
-    echo "No terminal block found, creating one..."
-    $WSH run bash -c 'echo "wave-orch-smoke-ready"' &>/dev/null || true
-    sleep 2
+    echo "No terminal block found for cwd: $EXPECTED_CWD"
+    echo "Creating a fresh shell block..."
+    ensure_shell_widget "$WSH" >/dev/null 2>&1 || true
+    BLOCK_ID=$(launch_shell_block "$WSH" || echo "")
+    sleep 1
+    if [[ -z "$BLOCK_ID" ]]; then
+        BLOCK_ID=$(echo "$BLOCKS_JSON" | jq -r '.[-1].blockid // empty')
+    fi
     BLOCKS_JSON=$($WSH blocks list --view=term --json 2>/dev/null || echo "[]")
-    BLOCK_ID=$(echo "$BLOCKS_JSON" | jq -r '.[0].blockid // empty')
 fi
 
 if [[ -z "$BLOCK_ID" ]]; then
@@ -62,7 +93,9 @@ if [[ -z "$BLOCK_ID" ]]; then
     echo "Blocks: $BLOCKS_JSON"
     exit 3
 fi
-echo "✅ Block ID: $BLOCK_ID"
+BLOCK_CWD=$(echo "$BLOCKS_JSON" | jq -r --arg id "$BLOCK_ID" 'map(select(.blockid==$id)) | .[0].meta["cmd:cwd"] // empty')
+echo "✅ Block ID: $BLOCK_ID (cwd: $BLOCK_CWD)"
+echo "Expected cwd: $EXPECTED_CWD"
 
 # === Inject ===
 echo "--- Injecting command ---"
@@ -71,6 +104,7 @@ echo "✅ Injected"
 
 # === Wait ===
 echo "--- Waiting for pattern ---"
+echo "Pattern: wave-orch-smoke-test-ok"
 sleep 1
 if $WSH wait "$BLOCK_ID" --pattern="wave-orch-smoke-test-ok" --timeout=5000; then
     echo "✅ Pattern found"
@@ -80,8 +114,8 @@ fi
 
 # === Output ===
 echo "--- Getting output ---"
-OUTPUT=$($WSH output "$BLOCK_ID" --lines=10 2>/dev/null || echo "")
-echo "$OUTPUT"
+OUTPUT=$($WSH output "$BLOCK_ID" --lines=200 2>/dev/null || echo "")
+echo "$OUTPUT" | redact_output
 
 if echo "$OUTPUT" | grep -q "wave-orch-smoke-test-ok"; then
     echo ""
