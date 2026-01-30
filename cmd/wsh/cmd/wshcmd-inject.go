@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/wavetermdev/waveterm/pkg/wshrpc"
@@ -24,10 +26,14 @@ var injectCmd = &cobra.Command{
 
 var injectNoNewline bool
 var injectFile string
+var injectWait bool
+var injectRetries int
 
 func init() {
 	injectCmd.Flags().BoolVarP(&injectNoNewline, "no-newline", "n", false, "do not append newline")
 	injectCmd.Flags().StringVarP(&injectFile, "file", "f", "", "read input from file")
+	injectCmd.Flags().BoolVarP(&injectWait, "wait", "w", false, "wait for shell ready (retry on failure)")
+	injectCmd.Flags().IntVar(&injectRetries, "retries", 5, "max retries when --wait is set")
 	rootCmd.AddCommand(injectCmd)
 }
 
@@ -56,11 +62,31 @@ func injectRun(cmd *cobra.Command, args []string) error {
 		InputData64: base64.StdEncoding.EncodeToString([]byte(text)),
 	}
 
-	err := wshclient.ControllerInputCommand(RpcClient, inputData, nil)
-	if err != nil {
-		return fmt.Errorf("inject failed: %w", err)
+	// Retry logic for --wait flag
+	var err error
+	maxAttempts := 1
+	if injectWait {
+		maxAttempts = injectRetries
 	}
 
-	WriteStdout("injected %d bytes\n", len(text))
-	return nil
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err = wshclient.ControllerInputCommand(RpcClient, inputData, nil)
+		if err == nil {
+			WriteStdout("injected %d bytes\n", len(text))
+			return nil
+		}
+
+		// Check if error is "no shell input chan" - retry if --wait
+		if injectWait && strings.Contains(err.Error(), "no shell input chan") {
+			if attempt < maxAttempts {
+				// Exponential backoff: 200ms, 400ms, 800ms...
+				delay := time.Duration(200<<(attempt-1)) * time.Millisecond
+				time.Sleep(delay)
+				continue
+			}
+		}
+		break
+	}
+
+	return fmt.Errorf("inject failed: %w", err)
 }
