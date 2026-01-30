@@ -50,6 +50,12 @@ var waveOrchDiagnosticCmd = &cobra.Command{
 	RunE:  waveOrchDiagnosticRun,
 }
 
+var waveOrchDemoCmd = &cobra.Command{
+	Use:   "demo",
+	Short: "run 3-agent parallel demo",
+	RunE:  waveOrchDemoRun,
+}
+
 var cleanupDays int
 var diagnosticProject string
 
@@ -61,6 +67,7 @@ func init() {
 	waveOrchCmd.AddCommand(waveOrchCleanupCmd)
 	waveOrchDiagnosticCmd.Flags().StringVar(&diagnosticProject, "project", "", "project path to diagnose")
 	waveOrchCmd.AddCommand(waveOrchDiagnosticCmd)
+	waveOrchCmd.AddCommand(waveOrchDemoCmd)
 	rootCmd.AddCommand(waveOrchCmd)
 }
 
@@ -182,6 +189,39 @@ func waveOrchDiagnosticRun(cmd *cobra.Command, args []string) error {
 	// 清理旧日志
 	logger := waveorch.NewLogger(7)
 	logger.CleanOldLogs()
+
+	return nil
+}
+
+func waveOrchDemoRun(cmd *cobra.Command, args []string) error {
+	// 检查 kill switch
+	if isPaused() {
+		WriteStdout("Wave-Orch paused - demo skipped\n")
+		return nil
+	}
+
+	WriteStdout("=== Wave-Orch 3-Agent Demo ===\n\n")
+
+	// 初始化 Agent 注册表
+	registry := waveorch.NewAgentRegistry()
+	registry.InitDefaultAgents()
+	registry.DetectAvailableAgents()
+
+	// 显示可用 Agent
+	available := registry.GetAvailableAgents()
+	WriteStdout("Available agents: %d\n", len(available))
+	for _, agent := range available {
+		WriteStdout("  - %s: %s\n", agent.Name, agent.ExecCmd)
+	}
+
+	if len(available) == 0 {
+		WriteStdout("\n❌ No agent CLI found\n")
+		WriteStdout("Install at least one of: claude, codex, gemini\n")
+		return nil
+	}
+
+	WriteStdout("\n✅ Demo ready. Run scripts/wave_orch_demo_3_agents.sh for full demo.\n")
+	WriteStdout("   (Requires Wave Terminal running)\n")
 
 	return nil
 }
