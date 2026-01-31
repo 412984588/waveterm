@@ -5,6 +5,7 @@ package envutil
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -110,6 +111,16 @@ func CopyAndAddToEnvMap(envMap map[string]string, key string, val string) map[st
 	}
 	newMap[key] = val
 	return newMap
+}
+
+// EnvKeys returns a stable, sorted list of environment variable names.
+func EnvKeys(envMap map[string]string) []string {
+	keys := make([]string, 0, len(envMap))
+	for key := range envMap {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func PruneInitialEnv(envMap map[string]string) map[string]string {

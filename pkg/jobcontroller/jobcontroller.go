@@ -301,7 +301,7 @@ func StartJob(ctx context.Context, params StartJobParams) (string, error) {
 	}
 
 	log.Printf("[job:%s] sending RemoteStartJobCommand to connection %s, cmd=%q, args=%v", jobId, params.ConnName, params.Cmd, params.Args)
-	log.Printf("[job:%s] env=%v", jobId, params.Env)
+	log.Printf("[job:%s] env keys=%v", jobId, envutil.EnvKeys(params.Env))
 	rtnData, err := wshclient.RemoteStartJobCommand(bareRpc, startJobData, rpcOpts)
 	if err != nil {
 		log.Printf("[job:%s] RemoteStartJobCommand failed: %v", jobId, err)
