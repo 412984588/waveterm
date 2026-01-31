@@ -11,6 +11,12 @@ source "$SCRIPT_DIR/wave_orch_lib.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 EXPECTED_CWD="${EXPECTED_CWD:-$REPO_ROOT}"
 
+# Block 缓存文件（防止长跑时无限创建新 block）
+CACHE_FILE="/tmp/wave_orch_smoke_blockid"
+
+# 强制新建开关（默认关闭）
+FORCE_NEW_BLOCK="${WAVE_ORCH_FORCE_NEW_BLOCK:-0}"
+
 # === Resolve WSH ===
 # 优先使用本地构建的 wsh（包含 inject/output/wait 命令）
 resolve_wsh() {
@@ -51,21 +57,44 @@ if ! $WSH blocks list --view=term --json 2>/dev/null; then
     exit 2
 fi
 
-# === Get or Create Block ===
+# === Block Selection ===
+# 选择最后一个匹配 cwd 的 term block（不再要求唯一）
 select_block_by_cwd() {
     local blocks_json="$1"
     local cwd="$2"
-    local matches
-    matches=$(echo "$blocks_json" | jq -r --arg cwd "$cwd" '
+    echo "$blocks_json" | jq -r --arg cwd "$cwd" '
       map(select(.view=="term" and .meta["cmd:cwd"]==$cwd))
+      | .[-1].blockid // empty
+    '
+}
+
+# 检查缓存的 blockid 是否仍然有效
+check_cached_block() {
+    local cached_id="$1"
+    local blocks_json="$2"
+    local cwd="$3"
+    local match
+    match=$(echo "$blocks_json" | jq -r --arg id "$cached_id" --arg cwd "$cwd" '
+      map(select(.blockid==$id and .view=="term" and .meta["cmd:cwd"]==$cwd))
+      | length
     ')
-    local count
-    count=$(echo "$matches" | jq -r 'length')
-    if [[ "$count" -eq 1 ]]; then
-        echo "$matches" | jq -r '.[0].blockid // empty'
-    else
-        echo ""
+    [[ "$match" -ge 1 ]]
+}
+
+# 尝试注入并验证
+try_inject_and_verify() {
+    local block_id="$1"
+    local cmd="$2"
+    local pattern="$3"
+
+    if ! $WSH inject --wait "$block_id" "$cmd" &>/dev/null; then
+        return 1
     fi
+    sleep 1
+    if ! $WSH wait "$block_id" --pattern="$pattern" --timeout=15000 &>/dev/null; then
+        return 1
+    fi
+    return 0
 }
 
 redact_output() {
@@ -82,44 +111,74 @@ redact_output() {
 
 echo "--- Getting terminal block ---"
 BLOCKS_JSON=$($WSH blocks list --view=term --json 2>/dev/null || echo "[]")
-BLOCK_ID=$(select_block_by_cwd "$BLOCKS_JSON" "$EXPECTED_CWD")
 
+# 策略：缓存 > cwd匹配 > 新建
+BLOCK_ID=""
+NEED_FRESH=0
+
+# 1) 检查强制新建开关
+if [[ "$FORCE_NEW_BLOCK" == "1" ]]; then
+    echo "WAVE_ORCH_FORCE_NEW_BLOCK=1, forcing fresh block"
+    NEED_FRESH=1
+fi
+
+# 2) 尝试复用缓存的 blockid
+if [[ "$NEED_FRESH" -eq 0 ]] && [[ -f "$CACHE_FILE" ]]; then
+    CACHED_ID=$(cat "$CACHE_FILE" 2>/dev/null || echo "")
+    if [[ -n "$CACHED_ID" ]] && check_cached_block "$CACHED_ID" "$BLOCKS_JSON" "$EXPECTED_CWD"; then
+        echo "Reusing cached block: $CACHED_ID"
+        BLOCK_ID="$CACHED_ID"
+    fi
+fi
+
+# 3) 按 cwd 匹配选择最后一个
+if [[ -z "$BLOCK_ID" ]] && [[ "$NEED_FRESH" -eq 0 ]]; then
+    BLOCK_ID=$(select_block_by_cwd "$BLOCKS_JSON" "$EXPECTED_CWD")
+    if [[ -n "$BLOCK_ID" ]]; then
+        echo "Reusing block by cwd match: $BLOCK_ID"
+    fi
+fi
+
+# 4) 尝试注入验证，失败则标记需要新建
+INJECT_CMD="cd \"$EXPECTED_CWD\" && echo \"wave-orch-smoke-test-ok\""
+PATTERN="wave-orch-smoke-test-ok"
+
+if [[ -n "$BLOCK_ID" ]]; then
+    echo "--- Injecting command ---"
+    if ! try_inject_and_verify "$BLOCK_ID" "$INJECT_CMD" "$PATTERN"; then
+        echo "⚠️ Inject/verify failed on $BLOCK_ID, will create fresh block"
+        BLOCK_ID=""
+        NEED_FRESH=1
+    fi
+fi
+
+# 5) 需要新建时才创建
 if [[ -z "$BLOCK_ID" ]]; then
-    echo "No unique terminal block found for cwd: $EXPECTED_CWD"
-    echo "Creating a fresh shell block..."
+    echo "Creating fresh shell block..."
     ensure_shell_widget "$WSH" >/dev/null 2>&1 || true
     BLOCK_ID=$(launch_shell_block "$WSH" || echo "")
     sleep 1
     if [[ -z "$BLOCK_ID" ]]; then
+        BLOCKS_JSON=$($WSH blocks list --view=term --json 2>/dev/null || echo "[]")
         BLOCK_ID=$(echo "$BLOCKS_JSON" | jq -r '.[-1].blockid // empty')
     fi
-    BLOCKS_JSON=$($WSH blocks list --view=term --json 2>/dev/null || echo "[]")
+    # 新建后需要注入
+    if [[ -n "$BLOCK_ID" ]]; then
+        echo "--- Injecting command to fresh block ---"
+        $WSH inject --wait "$BLOCK_ID" "$INJECT_CMD" &>/dev/null || true
+        sleep 1
+        $WSH wait "$BLOCK_ID" --pattern="$PATTERN" --timeout=15000 &>/dev/null || true
+    fi
 fi
 
 if [[ -z "$BLOCK_ID" ]]; then
     echo "❌ Failed to get block ID"
-    echo "Blocks: $BLOCKS_JSON"
     exit 3
 fi
-BLOCK_CWD=$(echo "$BLOCKS_JSON" | jq -r --arg id "$BLOCK_ID" 'map(select(.blockid==$id)) | .[0].meta["cmd:cwd"] // empty')
-echo "✅ Block ID: $BLOCK_ID (cwd: $BLOCK_CWD)"
-echo "Expected cwd: $EXPECTED_CWD"
 
-# === Inject ===
-echo "--- Injecting command ---"
-INJECT_CMD="cd \"$EXPECTED_CWD\" && echo \"wave-orch-smoke-test-ok\""
-$WSH inject --wait "$BLOCK_ID" "$INJECT_CMD" &>/dev/null
-echo "✅ Injected"
-
-# === Wait ===
-echo "--- Waiting for pattern ---"
-echo "Pattern: wave-orch-smoke-test-ok"
-sleep 1
-if $WSH wait "$BLOCK_ID" --pattern="wave-orch-smoke-test-ok" --timeout=15000 &>/dev/null; then
-    echo "✅ Pattern found"
-else
-    echo "⚠️ Wait timeout, checking output anyway..."
-fi
+# 更新缓存
+echo "$BLOCK_ID" > "$CACHE_FILE"
+echo "✅ Block ID: $BLOCK_ID (cached to $CACHE_FILE)"
 
 # === Output ===
 echo "--- Getting output ---"

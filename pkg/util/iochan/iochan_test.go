@@ -17,33 +17,46 @@ const (
 )
 
 func TestIochan_Basic(t *testing.T) {
-	// Write the packet to the source pipe from a goroutine
 	srcPipeReader, srcPipeWriter := io.Pipe()
+	destPipeReader, destPipeWriter := io.Pipe()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	t.Cleanup(func() {
+		cancel(nil)
+		_ = srcPipeReader.Close()
+		_ = srcPipeWriter.Close()
+		_ = destPipeReader.Close()
+		_ = destPipeWriter.Close()
+	})
+
+	// Write the packet to the source pipe from a goroutine
 	packet := []byte("hello world")
 	go func() {
-		srcPipeWriter.Write(packet)
-		srcPipeWriter.Close()
+		_, _ = srcPipeWriter.Write(packet)
+		_ = srcPipeWriter.Close()
 	}()
 
 	// Initialize the reader channel
-	readerChanCallbackCalled := false
+	readerChanCallbackCalled := make(chan struct{}, 1)
 	readerChanCallback := func() {
-		srcPipeReader.Close()
-		readerChanCallbackCalled = true
+		_ = srcPipeReader.Close()
+		select {
+		case readerChanCallbackCalled <- struct{}{}:
+		default:
+		}
 	}
-	defer readerChanCallback() // Ensure the callback is called
-	ioch := iochan.ReaderChan(context.TODO(), srcPipeReader, buflen, readerChanCallback)
+	ioch := iochan.ReaderChan(ctx, srcPipeReader, buflen, readerChanCallback)
 
 	// Initialize the destination pipe and the writer channel
-	destPipeReader, destPipeWriter := io.Pipe()
-	writerChanCallbackCalled := false
+	writerChanCallbackCalled := make(chan struct{}, 1)
 	writerChanCallback := func() {
-		destPipeReader.Close()
-		destPipeWriter.Close()
-		writerChanCallbackCalled = true
+		_ = destPipeReader.Close()
+		_ = destPipeWriter.Close()
+		select {
+		case writerChanCallbackCalled <- struct{}{}:
+		default:
+		}
 	}
-	defer writerChanCallback() // Ensure the callback is called
-	iochan.WriterChan(context.TODO(), destPipeWriter, ioch, writerChanCallback, func(err error) {})
+	iochan.WriterChan(ctx, destPipeWriter, ioch, writerChanCallback, cancel)
 
 	// Read the packet from the destination pipe and compare it to the original packet
 	buf := make([]byte, buflen)
@@ -59,11 +72,14 @@ func TestIochan_Basic(t *testing.T) {
 	}
 
 	// Give the callbacks a chance to run before checking if they were called
-	time.Sleep(10 * time.Millisecond)
-	if !readerChanCallbackCalled {
+	select {
+	case <-readerChanCallbackCalled:
+	case <-time.After(200 * time.Millisecond):
 		t.Fatalf("ReaderChan callback not called")
 	}
-	if !writerChanCallbackCalled {
+	select {
+	case <-writerChanCallbackCalled:
+	case <-time.After(200 * time.Millisecond):
 		t.Fatalf("WriterChan callback not called")
 	}
 }

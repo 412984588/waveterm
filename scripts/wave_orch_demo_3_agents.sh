@@ -7,6 +7,16 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/wave_orch_lib.sh"
 
+# 期望的 cwd
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+EXPECTED_CWD="${EXPECTED_CWD:-$REPO_ROOT}"
+
+# Block 缓存文件（防止长跑时无限创建新 block）
+CACHE_FILE="/tmp/wave_orch_demo_3_agents_blockid"
+
+# 强制新建开关（默认关闭）
+FORCE_NEW_BLOCK="${WAVE_ORCH_FORCE_NEW_BLOCK:-0}"
+
 WSH=$(resolve_wsh)
 if [[ -z "$WSH" ]]; then
     echo "❌ wsh not found"
@@ -19,6 +29,54 @@ if ! command -v jq &>/dev/null; then
     echo "❌ jq not found"
     exit 1
 fi
+
+# === Block Selection Functions ===
+select_block_by_cwd() {
+    local blocks_json="$1"
+    local cwd="$2"
+    echo "$blocks_json" | jq -r --arg cwd "$cwd" '
+      map(select(.view=="term" and .meta["cmd:cwd"]==$cwd))
+      | .[-1].blockid // empty
+    '
+}
+
+check_cached_block() {
+    local cached_id="$1"
+    local blocks_json="$2"
+    local cwd="$3"
+    local match
+    match=$(echo "$blocks_json" | jq -r --arg id "$cached_id" --arg cwd "$cwd" '
+      map(select(.blockid==$id and .view=="term" and .meta["cmd:cwd"]==$cwd))
+      | length
+    ')
+    [[ "$match" -ge 1 ]]
+}
+
+try_inject_and_verify() {
+    local block_id="$1"
+    local cmd="$2"
+    local pattern="$3"
+    if ! $WSH inject --wait "$block_id" "$cmd" &>/dev/null; then
+        return 1
+    fi
+    sleep 1
+    if ! $WSH wait "$block_id" --pattern="$pattern" --timeout=15000 &>/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
+redact_output() {
+    sed -E \
+        -e 's/(xox[baprs]-[A-Za-z0-9-]+)/REDACTED/g' \
+        -e 's/(gh[pousr]_[A-Za-z0-9_]+)/REDACTED/g' \
+        -e 's/(github_pat_[A-Za-z0-9_]+)/REDACTED/g' \
+        -e 's/(sk-[A-Za-z0-9]{8,})/REDACTED/g' \
+        -e 's/(AIzaSy[ A-Za-z0-9_-]{10,})/REDACTED/g' \
+        -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._-]+/\1REDACTED/Ig' \
+        -e 's/(authorization:[[:space:]]*)([^[:space:]]+)/\1REDACTED/Ig' \
+        -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/REDACTED/g'
+}
 
 # === Check Wave Running ===
 echo "--- Checking Wave connection ---"
@@ -46,22 +104,81 @@ if [[ ${#AGENTS[@]} -eq 0 ]]; then
     exit 3
 fi
 
-# === Ensure Shell Widget ===
-echo "--- Ensuring shell widget ---"
-ensure_shell_widget "$WSH" || exit 4
+# === Block Selection (reuse strategy) ===
+echo "--- Getting terminal block ---"
+BLOCKS_JSON=$($WSH blocks list --view=term --json 2>/dev/null || echo "[]")
 
-# === Launch Shell Blocks ===
-echo "--- Launching shell blocks ---"
-declare -a BLOCK_IDS
+BLOCK_ID=""
+NEED_FRESH=0
 
-for agent in "${AGENTS[@]}"; do
-    BLOCK_ID=$(launch_shell_block "$WSH")
-    if [[ -z "$BLOCK_ID" ]]; then
-        echo "❌ Failed to launch block for $agent"
-        exit 5
+# 1) 检查强制新建开关
+if [[ "$FORCE_NEW_BLOCK" == "1" ]]; then
+    echo "WAVE_ORCH_FORCE_NEW_BLOCK=1, forcing fresh block"
+    NEED_FRESH=1
+fi
+
+# 2) 尝试复用缓存的 blockid
+if [[ "$NEED_FRESH" -eq 0 ]] && [[ -f "$CACHE_FILE" ]]; then
+    CACHED_ID=$(cat "$CACHE_FILE" 2>/dev/null || echo "")
+    if [[ -n "$CACHED_ID" ]] && check_cached_block "$CACHED_ID" "$BLOCKS_JSON" "$EXPECTED_CWD"; then
+        echo "Reusing cached block: $CACHED_ID"
+        BLOCK_ID="$CACHED_ID"
     fi
+fi
+
+# 3) 按 cwd 匹配选择最后一个
+if [[ -z "$BLOCK_ID" ]] && [[ "$NEED_FRESH" -eq 0 ]]; then
+    BLOCK_ID=$(select_block_by_cwd "$BLOCKS_JSON" "$EXPECTED_CWD")
+    if [[ -n "$BLOCK_ID" ]]; then
+        echo "Reusing block by cwd match: $BLOCK_ID"
+    fi
+fi
+
+# 4) 尝试注入验证，失败则标记需要新建
+INJECT_CMD="cd \"$EXPECTED_CWD\" && echo \"wave-orch-3agents-ok\""
+PATTERN="wave-orch-3agents-ok"
+
+if [[ -n "$BLOCK_ID" ]]; then
+    echo "--- Injecting command ---"
+    if ! try_inject_and_verify "$BLOCK_ID" "$INJECT_CMD" "$PATTERN"; then
+        echo "⚠️ Inject/verify failed on $BLOCK_ID, will create fresh block"
+        BLOCK_ID=""
+        NEED_FRESH=1
+    fi
+fi
+
+# 5) 需要新建时才创建
+if [[ -z "$BLOCK_ID" ]]; then
+    echo "Creating fresh shell block..."
+    ensure_shell_widget "$WSH" >/dev/null 2>&1 || true
+    BLOCK_ID=$(launch_shell_block "$WSH" || echo "")
+    sleep 1
+    if [[ -z "$BLOCK_ID" ]]; then
+        BLOCKS_JSON=$($WSH blocks list --view=term --json 2>/dev/null || echo "[]")
+        BLOCK_ID=$(echo "$BLOCKS_JSON" | jq -r '.[-1].blockid // empty')
+    fi
+    if [[ -n "$BLOCK_ID" ]]; then
+        echo "--- Injecting command to fresh block ---"
+        $WSH inject --wait "$BLOCK_ID" "$INJECT_CMD" &>/dev/null || true
+        sleep 1
+        $WSH wait "$BLOCK_ID" --pattern="$PATTERN" --timeout=15000 &>/dev/null || true
+    fi
+fi
+
+if [[ -z "$BLOCK_ID" ]]; then
+    echo "❌ Failed to get block ID"
+    exit 4
+fi
+
+# 更新缓存
+echo "$BLOCK_ID" > "$CACHE_FILE"
+echo "✅ Block ID: $BLOCK_ID (cached to $CACHE_FILE)"
+
+# 使用同一个 block 给所有 agents
+declare -a BLOCK_IDS
+for agent in "${AGENTS[@]}"; do
     BLOCK_IDS+=("$BLOCK_ID")
-    echo "✅ $agent block: $BLOCK_ID"
+    echo "✅ $agent using block: $BLOCK_ID"
 done
 
 # === Inject REPORT Commands ===
@@ -82,7 +199,8 @@ for i in "${!AGENTS[@]}"; do
     # Wait for REPORT to appear (with timeout)
     $WSH wait --timeout=5s "$block" "<<<END_REPORT>>>" &>/dev/null || true
     sleep 2
-    OUTPUT=$($WSH output "$block" --lines=50 2>/dev/null || echo "")
+    OUTPUT=$($WSH output "$block" --lines=200 2>/dev/null || echo "")
+    OUTPUT=$(echo "$OUTPUT" | redact_output)
 
     # Merge lines and extract JSON (terminal wraps long lines)
     MERGED=$(echo "$OUTPUT" | tr -d '\n' | tr -s ' ')
